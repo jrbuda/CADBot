@@ -3,7 +3,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelect
 
 module.exports = {
     name: 'record',
-    description: 'Submit the result of a completed scrim.',
+    description: 'Manually submit a scrim result (fallback for the auto-posted result embed).',
     permission: 'CAPTAIN',
     no_defer: false,
     ephemeral: true,

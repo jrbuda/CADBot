@@ -40,7 +40,7 @@ module.exports = {
             : 0;
 
         const embed = new EmbedBuilder()
-            .setTitle(isSelf ? 'Your Availability' : `${target.displayName}'s Availability`)
+            .setTitle(isSelf ? 'Your Availability' : `${target.globalName || target.username}'s Availability`)
             .setDescription(schedule)
             .setColor(0x5865F2)
             .setFooter({ text: `All times in ${timezone}` })

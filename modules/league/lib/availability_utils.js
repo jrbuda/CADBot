@@ -224,27 +224,36 @@ function findScrimSlots(team1_players, team2_players, availability_data, options
  * @returns {number} Unix timestamp in seconds
  */
 function toUnixTimestamp(date, minutes, timezone = 'America/New_York') {
-    // Build a local time string for the target timezone
-    const year  = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day   = String(date.getDate()).padStart(2, '0');
-    const hours = String(Math.floor(minutes / 60)).padStart(2, '0');
-    const mins  = String(minutes % 60).padStart(2, '0');
+    // Calendar components of the intended wall-clock time.
+    const year = date.getFullYear();
+    const mon  = date.getMonth();
+    const day  = date.getDate();
+    const hour = Math.floor(minutes / 60);
+    const min  = minutes % 60;
 
-    // Parse back as if it's a local time in the given timezone
-    const dtStr = `${year}-${month}-${day}T${hours}:${mins}:00`;
+    // Treat the desired wall-clock time as if it were UTC.
+    const asUTC = Date.UTC(year, mon, day, hour, min, 0);
 
-    // Use Intl to determine the UTC offset at this moment in the target TZ
+    // Render that same instant in the target timezone to discover the zone's
+    // offset at that moment (DST-aware), then back the offset out.
     const parts = new Intl.DateTimeFormat('en-US', {
         timeZone: timezone,
         year:     'numeric', month:  '2-digit', day:    '2-digit',
         hour:     '2-digit', minute: '2-digit', second: '2-digit',
         hour12:   false,
-    }).formatToParts(new Date(dtStr));
+    }).formatToParts(new Date(asUTC));
 
-    const get = (type) => parts.find(p => p.type === type)?.value;
-    const utcStr = `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}Z`;
-    return Math.floor(new Date(utcStr).getTime() / 1000);
+    const get = (type) => parseInt(parts.find(p => p.type === type)?.value, 10);
+    let zoneHour = get('hour');
+    if (zoneHour === 24) zoneHour = 0; // Intl can emit "24" for midnight in some envs
+
+    const asZone = Date.UTC(get('year'), get('month') - 1, get('day'), zoneHour, get('minute'), get('second'));
+
+    // offset = (wall-clock interpreted in zone) - (wall-clock interpreted as UTC)
+    const offset = asZone - asUTC;
+
+    // The true UTC instant for the requested wall-clock time in `timezone`.
+    return Math.floor((asUTC - offset) / 1000);
 }
 
 // ── Availability display helpers ──────────────────────────────────────────────

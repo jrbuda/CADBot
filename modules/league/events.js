@@ -1,5 +1,4 @@
 'use strict';
-const path = require('path');
 const {
     ModalBuilder, TextInputBuilder, TextInputStyle,
     ActionRowBuilder, ButtonBuilder, ButtonStyle,
@@ -7,16 +6,16 @@ const {
     GuildScheduledEventEntityType, GuildScheduledEventPrivacyLevel,
 } = require('discord.js');
 
-const DataManager     = require('../../core/js/data_manager.js');
-const PermissionHandler = require('../../core/js/permission_handler.js');
 const { lookupRiotId } = require('./lib/riot_api.js');
 const { formatDate, formatTime, toUnixTimestamp, DAY_NAMES, parseTime, formatWeeklySchedule } = require('./lib/availability_utils.js');
 const { randomUUID }  = require('crypto');
 
+// These are assigned from the shared core singletons in register_handlers().
+// Using the shared DataManager (rather than a second instance) guarantees the
+// event handlers and slash-command handlers read/write the same cached state.
 let logger;
-const data_path = path.join(__dirname, '../../data');
-const data      = new DataManager(data_path, { error: () => {}, info: () => {}, warn: () => {} });
-const perms     = new PermissionHandler(data);
+let data;
+let perms;
 
 // ── Custom ID constants ───────────────────────────────────────────────────────
 const CID = {
@@ -34,6 +33,10 @@ const CID = {
     SCRIM_ACCEPT:         'SCRIM_ACCEPT',      // prefix: SCRIM_ACCEPT_<scrim_id>
     SCRIM_DECLINE:        'SCRIM_DECLINE',     // prefix: SCRIM_DECLINE_<scrim_id>
     SCRIM_DISPUTE:        'SCRIM_DISPUTE',     // prefix: SCRIM_DISPUTE_<scrim_id>
+    SCRIM_WIN_T1:         'SCRIM_WIN_T1',      // prefix: SCRIM_WIN_T1_<scrim_id>
+    SCRIM_WIN_T2:         'SCRIM_WIN_T2',      // prefix: SCRIM_WIN_T2_<scrim_id>
+    SCRIM_EDIT:           'SCRIM_EDIT',        // prefix: SCRIM_EDIT_<scrim_id>
+    SCRIM_EDIT_MODAL:     'SCRIM_EDIT_MODAL',  // prefix: SCRIM_EDIT_MODAL_<scrim_id>
     RECORD_SELECT:        'RECORD_SCRIM_SELECT',
     RECORD_RESULT_MODAL:  'RECORD_RESULT_MODAL', // prefix: RECORD_RESULT_MODAL_<scrim_id>
     TRYOUT_INTEREST:      'TRYOUT_INTEREST',   // prefix: TRYOUT_INTEREST_<session_id>
@@ -93,8 +96,8 @@ function parseTimeRanges(raw) {
 
 function register_handlers(event_registry) {
     logger = event_registry.logger;
-    // Override the data/perms logger reference
-    data.logger = logger;
+    data   = event_registry.data_manager;   // shared singleton (see EventRegistry)
+    perms  = event_registry.permissions;     // shared singleton
 
     event_registry.register('interactionCreate', async (interaction) => {
         try {
@@ -110,6 +113,19 @@ function register_handlers(event_registry) {
             } catch (_) {}
         }
     });
+
+    // ── Scrim result scheduler ────────────────────────────────────────────────
+    // Poll every 60s. When a confirmed scrim reaches its start time, auto-post
+    // the result embed (Win / Edit Players buttons) in the scrim channel and
+    // ping both captains. Scrims whose start passed while the bot was offline
+    // are caught on the next poll after startup.
+    const client = event_registry.client;
+    const POLL_MS = 60 * 1000;
+    setInterval(() => {
+        if (!client.isReady || !client.isReady()) return;
+        checkDueScrims(client).catch(err => logger.error('[scrim scheduler] ' + err.message));
+    }, POLL_MS);
+    logger.info('[scrim scheduler] Result poller started (60s interval).');
 }
 
 // ── Button handlers ───────────────────────────────────────────────────────────
@@ -188,7 +204,7 @@ async function handleButton(interaction) {
             },
             {
                 id:          'override_times',
-                label:       'Available times — or "none" to mark unavailable',
+                label:       "Times (or 'none' for unavailable)",
                 placeholder: '2pm-6pm, 8pm-11pm  — or  none',
                 style:       TextInputStyle.Short,
                 required:    true,
@@ -251,6 +267,22 @@ async function handleButton(interaction) {
         return;
     }
 
+    // ─ Scrim result: Team 1 / Team 2 win buttons ─────────────────────────────
+    if (id.startsWith('SCRIM_WIN_T1_')) {
+        await handleScrimWinButton(interaction, id.replace('SCRIM_WIN_T1_', ''), 1);
+        return;
+    }
+    if (id.startsWith('SCRIM_WIN_T2_')) {
+        await handleScrimWinButton(interaction, id.replace('SCRIM_WIN_T2_', ''), 2);
+        return;
+    }
+
+    // ─ Scrim result: Edit players button ─────────────────────────────────────
+    if (id.startsWith('SCRIM_EDIT_')) {
+        await handleScrimEditButton(interaction, id.replace('SCRIM_EDIT_', ''));
+        return;
+    }
+
     // ─ Tryout: Express interest ──────────────────────────────────────────────
     if (id.startsWith('TRYOUT_INTEREST_')) {
         await handleTryoutInterest(interaction, id.replace('TRYOUT_INTEREST_', ''));
@@ -296,6 +328,12 @@ async function handleModal(interaction) {
     // ─ Record result modal ───────────────────────────────────────────────────
     if (id.startsWith('RECORD_RESULT_MODAL_')) {
         await handleRecordResultModal(interaction, id.replace('RECORD_RESULT_MODAL_', ''));
+        return;
+    }
+
+    // ─ Scrim edit-players modal ──────────────────────────────────────────────
+    if (id.startsWith('SCRIM_EDIT_MODAL_')) {
+        await handleScrimEditModal(interaction, id.replace('SCRIM_EDIT_MODAL_', ''));
         return;
     }
 }
@@ -504,6 +542,10 @@ async function handleScrimSlotSelect(interaction) {
         allow_fill:     cached.allow_fill,
         fill_interests: [],
         result:         null,
+        result_embed_posted: false,
+        result_message_id:   '',
+        players_team1:  [],
+        players_team2:  [],
         created_at:     new Date().toISOString(),
     };
     data.saveScrims(scrims);
@@ -613,7 +655,8 @@ async function handleScrimAccept(interaction, scrim_id) {
         .setDescription(
             `📅 <t:${unix}:D> ⏰ <t:${unix}:t> – <t:${unix_e}:t>\n\n` +
             `Accepted by <@${interaction.user.id}>\n` +
-            (eventId ? `A Discord event has been created for this scrim.` : '')
+            (eventId ? `A Discord event has been created for this scrim.\n` : '') +
+            `When the scrim starts, a result tracker will be posted here and both captains pinged.`
         )
         .setColor(0x57F287)
         .setFooter({ text: `Scrim ID: ${scrim_id}` })
@@ -719,7 +762,7 @@ async function handleRecordScrimSelect(interaction) {
             },
             {
                 id:          'roster',
-                label:       'Players who played (Discord IDs or @mentions)',
+                label:       'Players who played (@mentions)',
                 placeholder: '@Player1 @Player2 @Player3 @Player4 @Player5',
                 style:       TextInputStyle.Paragraph,
                 required:    true,
@@ -753,6 +796,11 @@ async function handleRecordResultModal(interaction, scrim_id) {
     const scrim   = data.getScrim(scrim_id);
     if (!scrim) {
         await interaction.editReply({ content: 'Scrim not found.' });
+        return;
+    }
+
+    if (scrim.result) {
+        await interaction.editReply({ content: 'A result has already been recorded for this scrim. Use the Dispute button if it is incorrect.' });
         return;
     }
 
@@ -910,7 +958,21 @@ async function handleFillInterest(interaction, scrim_id) {
         return;
     }
 
+    // Fill interest only makes sense while the scrim is still live.
+    if (scrim.status === 'declined' || scrim.status === 'completed' || scrim.status === 'disputed') {
+        await interaction.reply({ content: 'This scrim is no longer accepting fill interest.', ephemeral: true });
+        return;
+    }
+
     const uid = interaction.user.id;
+
+    // The fill button is intended for members OUTSIDE either scrimming team.
+    const player = data.getPlayer(uid);
+    if (player && (player.team_id === scrim.team1_id || player.team_id === scrim.team2_id)) {
+        await interaction.reply({ content: "You're already on one of the teams in this scrim.", ephemeral: true });
+        return;
+    }
+
     if (!scrim.fill_interests) scrim.fill_interests = [];
 
     if (scrim.fill_interests.includes(uid)) {
@@ -988,4 +1050,260 @@ async function handleTryoutInterest(interaction, session_id) {
     logger.info(`[tryout] ${uid} expressed interest in session ${session_id}`);
 }
 
+// ── Implementation: Scrim result scheduler & result embed ─────────────────────
+
+/**
+ * Returns the default starting roster (Main players) for a team as an array of
+ * Discord IDs.
+ */
+function defaultRoster(team_id) {
+    return data.getTeamPlayers(team_id)
+        .filter(p => p.team_type === 'Main')
+        .map(p => p.discord_id);
+}
+
+function rosterMentions(ids) {
+    if (!ids || ids.length === 0) return '_TBD_';
+    return ids.map(id => `<@${id}>`).join('\n');
+}
+
+/**
+ * Builds the result-tracking embed + button rows for a scrim.
+ * @param {Object} scrim
+ * @param {Object} team1
+ * @param {Object} team2
+ * @param {boolean} recorded - whether a result has already been recorded
+ */
+function buildResultEmbed(scrim, team1, team2, recorded = false) {
+    const unix = Math.floor(new Date(scrim.scheduled_time).getTime() / 1000);
+
+    const embed = new EmbedBuilder()
+        .setColor(recorded ? 0x57F287 : 0xFEE75C)
+        .setTitle(`Scrim ${recorded ? 'Result' : 'In Progress'} — ${team1?.name || '?'} vs ${team2?.name || '?'}`)
+        .addFields(
+            { name: `${team1?.name || 'Team 1'}`, value: rosterMentions(scrim.players_team1), inline: true },
+            { name: `${team2?.name || 'Team 2'}`, value: rosterMentions(scrim.players_team2), inline: true },
+        )
+        .setFooter({ text: `Scrim ID: ${scrim.id}` })
+        .setTimestamp();
+
+    if (recorded && scrim.result) {
+        const winnerTeam = scrim.result.winner === scrim.team1_id ? team1 : team2;
+        embed.setDescription(`🏆 **Winner: ${winnerTeam?.name || '?'}**\nRecorded by <@${scrim.result.submitted_by}>.`);
+        const disputeRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`SCRIM_DISPUTE_${scrim.id}`).setLabel('Dispute Result').setStyle(ButtonStyle.Danger),
+        );
+        return { embeds: [embed], components: [disputeRow] };
+    }
+
+    embed.setDescription(
+        `Started <t:${unix}:R>. Captains: report the result when the game ends.\n` +
+        `Use **Edit Players** if subs or fill-ins played.`
+    );
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`SCRIM_WIN_T1_${scrim.id}`).setLabel(`${team1?.name || 'Team 1'} Win`).setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`SCRIM_WIN_T2_${scrim.id}`).setLabel(`${team2?.name || 'Team 2'} Win`).setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`SCRIM_EDIT_${scrim.id}`).setLabel('Edit Players').setStyle(ButtonStyle.Secondary),
+    );
+
+    return { embeds: [embed], components: [row] };
+}
+
+/**
+ * Polls for confirmed scrims that have reached their start time and have not yet
+ * had a result embed posted, then posts the embed and pings both captains.
+ */
+async function checkDueScrims(client) {
+    const scrims = data.getScrims();
+    const config = data.getConfig();
+    if (!config.scrim_channel_id) return;
+
+    const now = Date.now();
+    let channel = null;
+
+    for (const scrim of Object.values(scrims)) {
+        if (scrim.status !== 'confirmed') continue;
+        if (scrim.result_embed_posted) continue;
+        if (!scrim.scheduled_time) continue;
+        if (new Date(scrim.scheduled_time).getTime() > now) continue;
+
+        const team1 = data.getTeam(scrim.team1_id);
+        const team2 = data.getTeam(scrim.team2_id);
+
+        // Populate default rosters (team mains) if not already set
+        if (!scrim.players_team1 || scrim.players_team1.length === 0) scrim.players_team1 = defaultRoster(scrim.team1_id);
+        if (!scrim.players_team2 || scrim.players_team2.length === 0) scrim.players_team2 = defaultRoster(scrim.team2_id);
+
+        if (!channel) {
+            channel = await client.channels.fetch(config.scrim_channel_id).catch(() => null);
+            if (!channel) { logger.warn('[scrim scheduler] Scrim channel unavailable.'); return; }
+        }
+
+        const pings = [team1?.captain_id, team2?.captain_id].filter(Boolean).map(id => `<@${id}>`).join(' ');
+        const payload = buildResultEmbed(scrim, team1, team2, false);
+
+        try {
+            const msg = await channel.send({
+                content: `${pings} your scrim is starting — report the result below when you finish.`,
+                ...payload,
+            });
+            scrim.result_embed_posted = true;
+            scrim.result_message_id    = msg.id;
+            data.saveScrims(scrims);
+            logger.info(`[scrim scheduler] Posted result embed for scrim ${scrim.id}`);
+        } catch (err) {
+            logger.error(`[scrim scheduler] Failed to post result embed for ${scrim.id}: ${err.message}`);
+        }
+    }
+}
+
+/**
+ * Records a winner when a captain/admin clicks a Win button. First click wins;
+ * the opposing captain may dispute via the button on the updated embed.
+ */
+async function handleScrimWinButton(interaction, scrim_id, teamNum) {
+    const scrims = data.getScrims();
+    const scrim  = scrims[scrim_id];
+    if (!scrim) {
+        await interaction.reply({ content: 'Scrim not found.', ephemeral: true });
+        return;
+    }
+    if (scrim.result) {
+        await interaction.reply({ content: 'A result has already been recorded for this scrim. Use Dispute if it is wrong.', ephemeral: true });
+        return;
+    }
+
+    const team1 = data.getTeam(scrim.team1_id);
+    const team2 = data.getTeam(scrim.team2_id);
+
+    // Only a captain of either team or an admin may record
+    const isCaptain = interaction.user.id === team1?.captain_id || interaction.user.id === team2?.captain_id;
+    if (!isCaptain && !perms.check('ADMIN', interaction.member, interaction.user.id)) {
+        await interaction.reply({ content: 'Only a team captain or an admin can record the result.', ephemeral: true });
+        return;
+    }
+
+    await interaction.deferUpdate();
+
+    const winner_id      = teamNum === 1 ? scrim.team1_id : scrim.team2_id;
+    const submitter_team = interaction.user.id === team1?.captain_id ? scrim.team1_id
+                          : interaction.user.id === team2?.captain_id ? scrim.team2_id
+                          : winner_id; // admin → attribute to winning team
+
+    scrim.result = {
+        winner:           winner_id,
+        submitted_by:     interaction.user.id,
+        submitted_at:     new Date().toISOString(),
+        roster_submitter: submitter_team,
+        players_team1:    scrim.players_team1 || [],
+        players_team2:    scrim.players_team2 || [],
+        notes:            '',
+        disputed:         false,
+        disputed_by:      null,
+        disputed_at:      null,
+    };
+    scrim.status = 'completed';
+    data.saveScrims(scrims);
+
+    const payload = buildResultEmbed(scrim, team1, team2, true);
+    await interaction.editReply(payload);
+
+    // Notify the opposing captain
+    const winnerTeam = winner_id === scrim.team1_id ? team1 : team2;
+    const oppCaptain = interaction.user.id === team1?.captain_id ? team2?.captain_id : team1?.captain_id;
+    if (oppCaptain) {
+        try {
+            const cap = await interaction.guild.members.fetch(oppCaptain);
+            await cap.send({ content: `A result was recorded for your scrim **${team1?.name} vs ${team2?.name}**: **${winnerTeam?.name} Win**. If this is wrong, use the Dispute button in <#${data.getConfig().scrim_channel_id}>.` });
+        } catch (_) {}
+    }
+
+    logger.info(`[scrim] Result via button: scrim ${scrim_id}, winner ${winner_id}, by ${interaction.user.id}`);
+}
+
+/**
+ * Opens a modal letting a captain edit which players from THEIR team played.
+ */
+async function handleScrimEditButton(interaction, scrim_id) {
+    const scrim = data.getScrim(scrim_id);
+    if (!scrim) {
+        await interaction.reply({ content: 'Scrim not found.', ephemeral: true });
+        return;
+    }
+
+    const team1 = data.getTeam(scrim.team1_id);
+    const team2 = data.getTeam(scrim.team2_id);
+
+    let which = null;
+    if (interaction.user.id === team1?.captain_id) which = 1;
+    else if (interaction.user.id === team2?.captain_id) which = 2;
+    else if (perms.check('ADMIN', interaction.member, interaction.user.id)) which = 1; // admin defaults to team 1
+    else {
+        await interaction.reply({ content: 'Only a team captain (or admin) can edit the players.', ephemeral: true });
+        return;
+    }
+
+    const current = (which === 1 ? scrim.players_team1 : scrim.players_team2) || [];
+    const teamName = which === 1 ? team1?.name : team2?.name;
+
+    const modal = makeModal(`SCRIM_EDIT_MODAL_${scrim_id}:${which}`, `Edit Players — ${(teamName || 'Team').substring(0, 30)}`, [
+        {
+            id:          'players',
+            label:       'Players who played (@mentions)',
+            placeholder: '@Player1 @Player2 @Player3 @Player4 @Player5',
+            style:       TextInputStyle.Paragraph,
+            required:    true,
+            value:       current.map(id => `<@${id}>`).join(' '),
+        },
+    ]);
+
+    await interaction.showModal(modal);
+}
+
+/**
+ * Applies the edited roster from the edit-players modal and refreshes the embed.
+ */
+async function handleScrimEditModal(interaction, rawId) {
+    const [scrim_id, whichStr] = rawId.split(':');
+    const which = parseInt(whichStr, 10) === 2 ? 2 : 1;
+
+    await interaction.deferUpdate().catch(() => {});
+
+    const scrims = data.getScrims();
+    const scrim  = scrims[scrim_id];
+    if (!scrim) {
+        await interaction.followUp({ content: 'Scrim not found.', ephemeral: true });
+        return;
+    }
+
+    const raw = interaction.fields.getTextInputValue('players');
+    const ids = [...raw.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
+
+    if (which === 1) scrim.players_team1 = ids;
+    else             scrim.players_team2 = ids;
+    data.saveScrims(scrims);
+
+    const team1 = data.getTeam(scrim.team1_id);
+    const team2 = data.getTeam(scrim.team2_id);
+
+    // Refresh the embed (whether or not a result is already recorded)
+    const payload = buildResultEmbed(scrim, team1, team2, !!scrim.result);
+    try {
+        await interaction.editReply(payload);
+    } catch (_) {
+        await interaction.followUp({ content: 'Players updated.', ephemeral: true });
+    }
+
+    logger.info(`[scrim] Players edited for scrim ${scrim_id} (team ${which}) by ${interaction.user.id}`);
+}
+
 module.exports = register_handlers;
+
+// Exposed for the validation/test harness only (no effect on runtime behavior).
+module.exports.__test = {
+    setContext: (d, p, l) => { data = d; perms = p; logger = l; },
+    checkDueScrims,
+    buildResultEmbed,
+    defaultRoster,
+};

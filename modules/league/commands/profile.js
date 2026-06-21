@@ -48,11 +48,15 @@ module.exports = {
         const team        = player.team_id ? data.getTeam(player.team_id) : null;
         const posEmoji    = POSITION_EMOJI[player.team_role] || '';
 
+        const avatarUrl = (target || message.author).displayAvatarURL
+            ? (target || message.author).displayAvatarURL({ size: 256 })
+            : null;
+
         const embed = new EmbedBuilder()
             .setTitle(displayName)
             .setColor(0x5865F2)
-            .setThumbnail(`https://cdn.discordapp.com/avatars/${targetId}/${target ? target.avatar : message.author.avatar}.png`)
             .setTimestamp();
+        if (avatarUrl) embed.setThumbnail(avatarUrl);
 
         // Riot ID
         embed.addFields({ name: 'Riot ID', value: `\`${player.riot_id || 'Unknown'}\``, inline: true });

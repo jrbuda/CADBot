@@ -1,6 +1,5 @@
 'use strict';
 const { EmbedBuilder } = require('discord.js');
-const { REGION } = require('../lib/riot_api.js');
 
 // op.gg uses a hyphenated format: "GameName-TAG"
 // Multi-search URL encodes summoners comma-separated
@@ -11,7 +10,7 @@ function toOpggName(gameName, tagLine) {
 module.exports = {
     name: 'opgg',
     description: 'Get op.gg profile or multi-search link for a player or team.',
-    permission: 'EVERYONE',
+    permission: 'MEMBER',
     num_args: 0,
     options: [
         {

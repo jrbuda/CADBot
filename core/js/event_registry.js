@@ -23,6 +23,13 @@ class EventRegistry {
      * @param {import('./module_handler.js')} mod_handler
      */
     discover_event_handlers(mod_handler) {
+        // Expose the shared core singletons so module event handlers reuse the
+        // same DataManager/PermissionHandler instances the command handlers use.
+        // This is critical: two separate DataManager instances would each keep
+        // their own in-memory cache and could serve stale data after a write.
+        this.data_manager = mod_handler.data;
+        this.permissions  = mod_handler.permissions;
+
         for (const [name, mod] of mod_handler.modules) {
             if (mod.config.event_handler) {
                 this.logger.info('Registering event handlers for module: ' + name);

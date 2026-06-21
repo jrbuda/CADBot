@@ -83,8 +83,17 @@ class PermissionHandler {
      * @returns {boolean}
      */
     _hasRole(member, role_id) {
-        if (!role_id || !member?.roles?.cache) return false;
-        return member.roles.cache.has(role_id);
+        if (!role_id || !member || !member.roles) return false;
+        const roles = member.roles;
+        // GuildMember → roles.cache (Collection with .has)
+        if (roles.cache && typeof roles.cache.has === 'function') {
+            return roles.cache.has(role_id);
+        }
+        // Raw API interaction member → roles is an array of role ID strings
+        if (Array.isArray(roles)) {
+            return roles.includes(role_id);
+        }
+        return false;
     }
 
     /**
