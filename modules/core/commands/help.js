@@ -58,11 +58,18 @@ module.exports = {
 
         for (const tier of TIER_ORDER) {
             if (byTier[tier].length === 0) continue;
-            const lines = byTier[tier].map(c => `${c.name} — ${c.description}`);
-            embed.addFields({
-                name: `${TIER_EMOJI[tier]} ${TIER_LABEL[tier]}`,
-                value: lines.join('\n'),
-            });
+
+            const header = `${TIER_EMOJI[tier]} ${TIER_LABEL[tier]}`;
+
+            if (tier === 'ADMIN' || tier === 'OWNER') {
+                // Compact: just the command names on one or two lines
+                const names = byTier[tier].map(c => c.name).join('  ');
+                embed.addFields({ name: header, value: names });
+            } else {
+                // Full: name + description
+                const lines = byTier[tier].map(c => `${c.name} — ${c.description}`);
+                embed.addFields({ name: header, value: lines.join('\n') });
+            }
         }
 
         await message.channel.send({ embeds: [embed] });

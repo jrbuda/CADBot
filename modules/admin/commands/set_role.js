@@ -6,6 +6,7 @@ module.exports = {
     name: 'set_role',
     description: 'Link a Discord role to an admin, captain, or tryout tier.',
     permission: 'ADMIN',
+    ephemeral: true,
     num_args: 0,
     options: [
         {

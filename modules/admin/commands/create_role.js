@@ -4,6 +4,7 @@ module.exports = {
     name: 'create_role',
     description: 'Create a new Discord role in this server.',
     permission: 'ADMIN',
+    ephemeral: true,
     num_args: 0,
     options: [
         {

@@ -303,7 +303,7 @@ class ModuleHandler {
             }
         }
 
-        const adapter = new InteractionAdapter(interaction, firstUser, firstMember, this.logger);
+        const adapter = new InteractionAdapter(interaction, firstUser, firstMember, this.logger, !!current_command.ephemeral);
         const extra   = {
             data:        this.data,
             permissions: this.permissions,

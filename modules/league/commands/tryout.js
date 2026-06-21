@@ -109,26 +109,27 @@ module.exports = {
                 return;
             }
 
-            const name    = interaction.options.getString('name');
+            const name_input = interaction.options.getString('name')?.trim();
             const date    = interaction.options.getString('date');
             const time    = interaction.options.getString('time');
             const spots   = interaction.options.getInteger('spots') ?? 10;
             const type    = interaction.options.getString('type')   || 'tryout';
             const open_to = interaction.options.getString('open_to') || 'tryout';
 
-            if (!name || !date || !time) {
-                await message.channel.send({ content: 'Please provide `name`, `date`, and `time` when creating a session.' });
+            if (!date || !time) {
+                await message.channel.send({ content: 'Please provide a `date` (YYYY-MM-DD) and `time` when creating a session.' });
                 return;
             }
 
-            // Validate date format
             if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-                await message.channel.send({ content: 'Invalid date format. Use YYYY-MM-DD.' });
+                await message.channel.send({ content: 'Invalid date format — use `YYYY-MM-DD`, e.g. `2025-07-15`.' });
                 return;
             }
 
-            const session_id = randomUUID();
+            // Auto-generate a name if none was provided
             const sessions   = data.getSessions();
+            const session_id = randomUUID();
+            const name = name_input || `Gaming Session #${Object.keys(sessions).length + 1}`;
             sessions[session_id] = {
                 id:         session_id,
                 type,

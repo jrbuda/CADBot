@@ -1,4 +1,5 @@
 'use strict';
+const { MessageFlags } = require('discord.js');
 
 /**
  * Adapts a Discord.js ChatInputCommandInteraction to a message-like interface
@@ -13,6 +14,9 @@
  *   message.channel.send()    → interaction.editReply() / followUp()
  *   message.mentions.users.first()   → first USER-type option user
  *   message.mentions.members.first() → first USER-type option member
+ *
+ * Pass ephemeral=true to ensure EVERY response (including follow-ups) is
+ * visible only to the invoking user.
  */
 class InteractionAdapter {
     /**
@@ -20,12 +24,14 @@ class InteractionAdapter {
      * @param {import('discord.js').User|null} firstUser
      * @param {import('discord.js').GuildMember|null} firstMember
      * @param {import('winston').Logger} logger
+     * @param {boolean} ephemeral - When true, all responses carry MessageFlags.Ephemeral
      */
-    constructor(interaction, firstUser, firstMember, logger) {
+    constructor(interaction, firstUser, firstMember, logger, ephemeral = false) {
         this._interaction          = interaction;
-        this._firstUser            = firstUser  || null;
+        this._firstUser            = firstUser   || null;
         this._firstMember          = firstMember || null;
         this._logger               = logger;
+        this._ephemeral            = ephemeral;
         this._hasEditedDeferredReply = false;
 
         this.author  = interaction.user;
@@ -47,8 +53,19 @@ class InteractionAdapter {
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
+    /**
+     * Applies the ephemeral flag to any payload that doesn't already specify flags,
+     * so the command doesn't have to know whether it was invoked ephemerally.
+     */
+    _applyEphemeral(payload) {
+        if (!this._ephemeral) return payload;
+        if (payload.flags !== undefined) return payload;   // command explicitly set flags
+        return { ...payload, flags: MessageFlags.Ephemeral };
+    }
+
     async _respond(payload) {
         if (typeof payload === 'string') payload = { content: payload };
+        payload = this._applyEphemeral(payload);
         try {
             if (this._interaction.replied) {
                 return await this._interaction.followUp(payload);

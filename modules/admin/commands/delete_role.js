@@ -4,6 +4,7 @@ module.exports = {
     name: 'delete_role',
     description: 'Delete a Discord role from this server.',
     permission: 'ADMIN',
+    ephemeral: true,
     num_args: 0,
     options: [
         {

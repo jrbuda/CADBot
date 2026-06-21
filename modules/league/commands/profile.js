@@ -16,6 +16,7 @@ module.exports = {
     name: 'profile',
     description: 'View a linked player\'s League of Legends profile and team info.',
     permission: 'EVERYONE',
+    ephemeral: true,
     num_args: 0,
     options: [
         {
