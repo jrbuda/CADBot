@@ -2,22 +2,18 @@
 const { EmbedBuilder } = require('discord.js');
 
 const POSITION_EMOJI = {
-    Top:     '🛡️',
-    Jungle:  '🌿',
-    Mid:     '⚡',
-    Bot:     '🏹',
-    Support: '💊',
+    Top: '🛡️', Jungle: '🌿', Mid: '⚡', Bot: '🏹', Support: '💊',
 };
 
 module.exports = {
     name: 'roster',
-    description: 'View the full roster of a team.',
+    description: 'View a team\'s roster, or list all teams if no team is specified.',
     permission: 'EVERYONE',
     num_args: 0,
     options: [
         {
             name: 'team',
-            description: 'Team to view (defaults to your own team)',
+            description: 'Team to view — leave blank to list all teams',
             type: 'STRING',
             required: false,
             autocomplete: true,
@@ -45,26 +41,49 @@ module.exports = {
 
         let team_id = interaction.options.getString('team');
 
-        // Default to the requester's own team
+        // If no team specified, try to default to the requester's own team
         if (!team_id) {
-            const player = data.getPlayer(message.author.id);
+            const player      = data.getPlayer(message.author.id);
+            const captainTeam = data.getTeamByCaptain(message.author.id);
             if (player?.team_id) {
                 team_id = player.team_id;
-            } else {
-                // Try captain
-                const captainTeam = data.getTeamByCaptain(message.author.id);
-                if (captainTeam) team_id = captainTeam.id;
+            } else if (captainTeam) {
+                team_id = captainTeam.id;
             }
         }
 
+        // ── No team resolved → show all-teams overview ────────────────────────
         if (!team_id) {
-            await message.channel.send({
-                content: 'You are not on a team. Specify a `team` option or join a team first.',
-            });
+            const all = Object.values(data.getTeams());
+            if (all.length === 0) {
+                await message.channel.send({ content: 'No teams have been created yet.' });
+                return;
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle('All Teams')
+                .setColor(0x5865F2)
+                .setTimestamp();
+
+            for (const team of all) {
+                const members = data.getTeamPlayers(team.id);
+                const mains   = members.filter(p => p.team_type === 'Main').length;
+                const subs    = members.filter(p => p.team_type === 'Substitute').length;
+                const captain = team.captain_id ? `<@${team.captain_id}>` : '_No captain_';
+                embed.addFields({
+                    name:   team.name,
+                    value:  `Captain: ${captain}\nRoster: ${mains} starter${mains !== 1 ? 's' : ''}, ${subs} sub${subs !== 1 ? 's' : ''}` +
+                            (team.discord_role_id ? `\nRole: <@&${team.discord_role_id}>` : ''),
+                    inline: true,
+                });
+            }
+
+            await message.channel.send({ embeds: [embed] });
             return;
         }
 
-        const team    = data.getTeam(team_id);
+        // ── Team resolved → show full roster ──────────────────────────────────
+        const team = data.getTeam(team_id);
         if (!team) {
             await message.channel.send({ content: 'Team not found.' });
             return;
@@ -76,7 +95,6 @@ module.exports = {
             return;
         }
 
-        // Sort: mains first, then by position order
         const posOrder = ['Top', 'Jungle', 'Mid', 'Bot', 'Support'];
         members.sort((a, b) => {
             if (a.team_type !== b.team_type) return a.team_type === 'Main' ? -1 : 1;
@@ -104,18 +122,10 @@ module.exports = {
             .setColor(0x5865F2)
             .setTimestamp();
 
-        if (team.captain_id) {
-            embed.addFields({ name: 'Captain', value: `<@${team.captain_id}>` });
-        }
-        if (mainLines.length > 0) {
-            embed.addFields({ name: `Starters (${mainLines.length})`, value: mainLines.join('\n') });
-        }
-        if (subLines.length > 0) {
-            embed.addFields({ name: `Substitutes (${subLines.length})`, value: subLines.join('\n') });
-        }
-        if (team.discord_role_id) {
-            embed.addFields({ name: 'Team Role', value: `<@&${team.discord_role_id}>` });
-        }
+        if (team.captain_id) embed.addFields({ name: 'Captain', value: `<@${team.captain_id}>` });
+        if (mainLines.length > 0) embed.addFields({ name: `Starters (${mainLines.length})`, value: mainLines.join('\n') });
+        if (subLines.length > 0) embed.addFields({ name: `Substitutes (${subLines.length})`, value: subLines.join('\n') });
+        if (team.discord_role_id) embed.addFields({ name: 'Team Role', value: `<@&${team.discord_role_id}>` });
 
         await message.channel.send({ embeds: [embed] });
     },

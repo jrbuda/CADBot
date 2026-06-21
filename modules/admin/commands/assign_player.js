@@ -6,7 +6,7 @@ const TYPES     = ['Main', 'Substitute'];
 
 module.exports = {
     name: 'assign_player',
-    description: 'Assign a player to a team with a position and role type.',
+    description: 'Assign a player to a team. Optionally promote them to captain.',
     permission: 'ADMIN',
     num_args: 0,
     options: [
@@ -37,6 +37,12 @@ module.exports = {
             required: true,
             choices: TYPES.map(t => ({ name: t, value: t })),
         },
+        {
+            name: 'captain',
+            description: 'Make this player the captain of the team',
+            type: 'BOOLEAN',
+            required: false,
+        },
     ],
 
     async autocomplete(interaction) {
@@ -58,12 +64,13 @@ module.exports = {
         const data        = extra.data;
         const interaction = extra.interaction;
 
-        const target   = interaction.options.getUser('player');
-        const team_id  = interaction.options.getString('team');
-        const position = interaction.options.getString('position');
-        const type     = interaction.options.getString('type');
+        const target    = interaction.options.getUser('player');
+        const team_id   = interaction.options.getString('team');
+        const position  = interaction.options.getString('position');
+        const type      = interaction.options.getString('type');
+        const makeCaptain = interaction.options.getBoolean('captain') ?? false;
 
-        const team   = data.getTeam(team_id);
+        const team = data.getTeam(team_id);
         if (!team) {
             await message.channel.send({ content: 'Team not found.' });
             return;
@@ -77,7 +84,10 @@ module.exports = {
             return;
         }
 
+        const config  = data.getConfig();
         const players = data.getPlayers();
+
+        // Update player record
         players[target.id].team_id   = team_id;
         players[target.id].team_role = position;
         players[target.id].team_type = type;
@@ -89,7 +99,35 @@ module.exports = {
                 const member = await message.guild.members.fetch(target.id);
                 await member.roles.add(team.discord_role_id);
             } catch (err) {
-                this.logger.warn(`[assign_player] Could not assign team role to ${target.id}: ${err.message}`);
+                this.logger.warn(`[assign_player] Could not assign team role: ${err.message}`);
+            }
+        }
+
+        // ── Captain promotion ─────────────────────────────────────────────────
+        if (makeCaptain) {
+            const teams = data.getTeams();
+            const previousCaptainId = teams[team_id].captain_id;
+
+            // Remove captain role from the previous captain (if different person)
+            if (previousCaptainId && previousCaptainId !== target.id && config.captain_role_id) {
+                try {
+                    const prevMember = await message.guild.members.fetch(previousCaptainId);
+                    await prevMember.roles.remove(config.captain_role_id);
+                } catch (_) { /* previous captain may have left the server */ }
+            }
+
+            // Set new captain
+            teams[team_id].captain_id = target.id;
+            data.saveTeams(teams);
+
+            // Assign captain role
+            if (config.captain_role_id) {
+                try {
+                    const member = await message.guild.members.fetch(target.id);
+                    await member.roles.add(config.captain_role_id);
+                } catch (err) {
+                    this.logger.warn(`[assign_player] Could not assign captain role: ${err.message}`);
+                }
             }
         }
 
@@ -97,14 +135,15 @@ module.exports = {
             .setTitle('Player Assigned')
             .setColor(0x5865F2)
             .addFields(
-                { name: 'Player',   value: `<@${target.id}>`, inline: true },
-                { name: 'Team',     value: team.name,          inline: true },
-                { name: 'Position', value: position,           inline: true },
-                { name: 'Type',     value: type,               inline: true },
+                { name: 'Player',   value: `<@${target.id}>`,                              inline: true },
+                { name: 'Team',     value: team.name,                                       inline: true },
+                { name: 'Position', value: position,                                        inline: true },
+                { name: 'Type',     value: type,                                            inline: true },
+                { name: 'Captain',  value: makeCaptain ? '✅ Yes' : '—',                    inline: true },
             )
             .setTimestamp();
 
         await message.channel.send({ embeds: [embed] });
-        this.logger.info(`[assign_player] ${target.id} assigned to team ${team.name} as ${type} ${position}`);
+        this.logger.info(`[assign_player] ${target.id} → ${team.name} (${type} ${position}${makeCaptain ? ', captain' : ''})`);
     },
 };
