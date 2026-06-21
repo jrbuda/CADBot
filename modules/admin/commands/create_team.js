@@ -6,7 +6,6 @@ module.exports = {
     name: 'create_team',
     description: 'Create a new team. Optionally link a Discord role to the team.',
     permission: 'ADMIN',
-    num_args: 0,
     options: [
         {
             name: 'name',
@@ -46,10 +45,43 @@ module.exports = {
         }
 
         const team_id = randomUUID();
+        let   discord_role_id = role ? role.id : '';
+
+        // If no role was specified, create one for the team
+        if (!role) {
+            try {
+                const newRole = await message.guild.roles.create({
+                    name: teamName,
+                    mentionable: true,
+                    reason: `Team role for ${teamName}`,
+                });
+                discord_role_id = newRole.id;
+            } catch (err) {
+                this.logger.warn(`[create_team] Could not create Discord role for "${teamName}": ${err.message}`);
+            }
+        }
+
+        // Create a captain role if one doesn't exist yet
+        const config = data.getConfig();
+        if (!config.captain_role_id) {
+            try {
+                const capRole = await message.guild.roles.create({
+                    name: 'Captain',
+                    color: 0xF1C40F,
+                    mentionable: true,
+                    reason: 'Auto-created captain role for CADBot',
+                });
+                config.captain_role_id = capRole.id;
+                data.saveConfig(config);
+            } catch (err) {
+                this.logger.warn('[create_team] Could not auto-create captain role: ' + err.message);
+            }
+        }
+
         teams[team_id] = {
             id:              team_id,
             name:            teamName,
-            discord_role_id: role ? role.id : '',
+            discord_role_id,
             captain_id:      '',
             created_at:      new Date().toISOString(),
         };
@@ -60,9 +92,9 @@ module.exports = {
             .setTitle('Team Created')
             .setColor(0x57F287)
             .addFields(
-                { name: 'Name',       value: teamName,         inline: true },
-                { name: 'Team ID',    value: `\`${team_id}\``, inline: true },
-                { name: 'Role',       value: role ? `<@&${role.id}>` : 'None assigned', inline: true },
+                { name: 'Name',       value: teamName,              inline: true },
+                { name: 'Team ID',    value: `\`${team_id}\``,      inline: true },
+                { name: 'Role',       value: discord_role_id ? `<@&${discord_role_id}>` : 'None', inline: true },
             )
             .setTimestamp();
 

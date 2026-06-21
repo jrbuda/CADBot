@@ -4,7 +4,6 @@ module.exports = {
     name: 'delete_team',
     description: 'Delete a team and unassign all of its players.',
     permission: 'ADMIN',
-    num_args: 0,
     options: [
         {
             name: 'team',
@@ -49,6 +48,7 @@ module.exports = {
 
         // Unassign all players on this team
         const players = data.getPlayers();
+        const config  = data.getConfig();
         let unassigned = 0;
         for (const [id, player] of Object.entries(players)) {
             if (player.team_id === team_id) {
@@ -56,6 +56,13 @@ module.exports = {
                 players[id].team_role  = '';
                 players[id].team_type  = '';
                 unassigned++;
+
+                if (config.captain_role_id && team.captain_id === id) {
+                    try {
+                        const member = await message.guild.members.fetch(id);
+                        await member.roles.remove(config.captain_role_id);
+                    } catch (_) {}
+                }
             }
         }
         data.savePlayers(players);

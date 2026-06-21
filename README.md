@@ -64,7 +64,6 @@ On first boot the bot registers all slash commands to your `GUILD_ID` and logs i
 Run these once, as the owner or an admin:
 
 ```
-/create_role name:Admins            # or reuse an existing role
 /set_role type:admin   role:@Admins
 /set_role type:captain role:@Captains
 /set_role type:tryout  role:@Tryouts
@@ -75,9 +74,8 @@ Run these once, as the owner or an admin:
 Then build out teams:
 
 ```
-/create_team name:"Team Alpha" role:@TeamAlpha
-/assign_player player:@User team:Team Alpha position:Mid type:Main
-/set_captain  player:@User team:Team Alpha
+/create_team name:"Team Alpha" [role:@TeamAlpha]
+/assign_player player:@User team:Team Alpha position:Mid type:Main [captain:true]
 ```
 
 Players onboard themselves:
@@ -140,12 +138,12 @@ sudo systemctl restart cadbot
 - `/ping`, `/help`, `/reload` (owner)
 
 **Admin** (admin tier)
-- `/create_team`, `/delete_team`, `/assign_player`, `/unassign_player`, `/set_captain`
-- `/mark_tryout`, `/create_role`, `/set_role`, `/set_channel`
+- `/create_team`, `/delete_team`, `/assign_player` (with optional `captain` flag), `/unassign_player`
+- `/mark_tryout`, `/set_role`, `/set_channel`, `/team_channel`
 
 **League**
-- `/link`, `/unlink`, `/availability`, `/profile`, `/roster`, `/teams`, `/opgg`
-- `/scrim` (captain), `/record` (captain, fallback), `/tryout`
+- `/link`, `/unlink`, `/availability`, `/profile`, `/roster`, `/opgg`
+- `/scrim` (captain), `/record` (captain, fallback), `/game` (create/list/view/close sessions)
 
 ---
 

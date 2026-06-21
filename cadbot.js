@@ -3,18 +3,6 @@ require('dotenv/config');
 
 const fs = require('fs');
 
-// ── Timezone ─────────────────────────────────────────────────────────────────
-// Force the process timezone to the league's configured timezone BEFORE any
-// Date objects are created. This keeps day-of-week / calendar-date matching in
-// the availability engine consistent with how times are interpreted, regardless
-// of the host server's own timezone.
-let _leagueTz = 'America/New_York';
-try {
-    const _cfg = JSON.parse(fs.readFileSync(__dirname + '/data/config.json', 'utf8'));
-    if (_cfg && _cfg.timezone) _leagueTz = _cfg.timezone;
-} catch (_) { /* fall back to default */ }
-process.env.TZ = _leagueTz;
-
 const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
 
 const LogHandler      = require('./core/js/log_handler.js');

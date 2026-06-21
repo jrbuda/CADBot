@@ -6,7 +6,6 @@ module.exports = {
     description: 'Set the game post channel for your team.',
     permission: 'CAPTAIN',
     ephemeral: true,
-    num_args: 0,
     options: [
         {
             name: 'channel',

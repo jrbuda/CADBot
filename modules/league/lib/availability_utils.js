@@ -73,20 +73,24 @@ function toDateStr(date) {
     return date.toISOString().split('T')[0];
 }
 
+/** Returns the lowercase day name for a date string in a given timezone. */
+function getDayName(dateStr, timezone) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'long' })
+        .format(new Date(dateStr + 'T12:00:00'))
+        .toLowerCase();
+}
+
 // ── Timezone conversion ───────────────────────────────────────────────────────
 
 /**
  * Converts a wall-clock time (date + minutes-since-midnight) in a given IANA
  * timezone to a UTC Unix timestamp (seconds). DST-aware.
  */
-function toUnixTimestamp(date, minutes, timezone = 'America/New_York') {
-    const year = date.getFullYear();
-    const mon  = date.getMonth();
-    const day  = date.getDate();
+function toUnixTimestamp(year, month, day, minutes, timezone = 'America/New_York') {
     const hour = Math.floor(minutes / 60);
     const min  = minutes % 60;
 
-    const asUTC = Date.UTC(year, mon, day, hour, min, 0);
+    const asUTC = Date.UTC(year, month, day, hour, min, 0);
 
     const parts = new Intl.DateTimeFormat('en-US', {
         timeZone: timezone,
@@ -108,14 +112,14 @@ function toUnixTimestamp(date, minutes, timezone = 'America/New_York') {
 
 /**
  * Returns the raw local-time windows (start/end in minutes-since-midnight, in
- * the player's own timezone) for a given date. Applies overrides over weekly.
+ * the player's own timezone) for a given date string. Applies overrides over weekly.
+ * @param {string} player_id
+ * @param {string} dateStr - YYYY-MM-DD
+ * @param {Object} availability_data
  */
-function getPlayerWindows(player_id, date, availability_data) {
+function getPlayerWindows(player_id, dateStr, availability_data) {
     const avail = availability_data[player_id];
     if (!avail) return [];
-
-    const dateStr = toDateStr(date);
-    const dayName = DAY_NAMES[date.getDay()];
 
     if (avail.overrides && Object.prototype.hasOwnProperty.call(avail.overrides, dateStr)) {
         const override = avail.overrides[dateStr];
@@ -126,6 +130,8 @@ function getPlayerWindows(player_id, date, availability_data) {
         })).filter(w => w.end > w.start);
     }
 
+    const tz      = avail.timezone || 'America/New_York';
+    const dayName = getDayName(dateStr, tz);
     const dayWindows = avail.weekly?.[dayName] || [];
     return dayWindows.map(w => ({
         start: parseTime(w.start) ?? 0,
@@ -148,18 +154,19 @@ function getPlayerWindows(player_id, date, availability_data) {
  * @param {number}   [min_players=5]
  * @returns {{ start_unix: number, end_unix: number, player_count: number }[]}
  */
-function findTeamWindowsUTC(player_ids, date, availability_data, min_players = 5) {
+function findTeamWindowsUTC(player_ids, dateStr, availability_data, min_players = 5) {
     const all_windows = [];
+    const [y, m, d] = dateStr.split('-').map(Number);
 
     for (const pid of player_ids) {
         const avail = availability_data[pid];
         if (!avail) continue;
         const tz = avail.timezone || 'America/New_York';
 
-        const localWins = getPlayerWindows(pid, date, availability_data);
+        const localWins = getPlayerWindows(pid, dateStr, availability_data);
         for (const w of localWins) {
-            const start_unix = toUnixTimestamp(date, w.start, tz);
-            const end_unix   = toUnixTimestamp(date, w.end,   tz);
+            const start_unix = toUnixTimestamp(y, m - 1, d, w.start, tz);
+            const end_unix   = toUnixTimestamp(y, m - 1, d, w.end,   tz);
             if (end_unix > start_unix) {
                 all_windows.push({ pid, start_unix, end_unix });
             }
@@ -226,18 +233,19 @@ function findScrimSlots(team1_players, team2_players, availability_data, options
     today.setHours(0, 0, 0, 0);
 
     for (let d = 1; d <= days && results.length < max_slots; d++) {
-        const date = new Date(today);
-        date.setDate(today.getDate() + d);
+        const d2 = new Date(today);
+        d2.setDate(today.getDate() + d);
+        const dateStr = toDateStr(d2);
 
-        const t1_wins = findTeamWindowsUTC(team1_players, date, availability_data, min_per_team);
-        const t2_wins = findTeamWindowsUTC(team2_players, date, availability_data, min_per_team);
+        const t1_wins = findTeamWindowsUTC(team1_players, dateStr, availability_data, min_per_team);
+        const t2_wins = findTeamWindowsUTC(team2_players, dateStr, availability_data, min_per_team);
 
         for (const w1 of t1_wins) {
             for (const w2 of t2_wins) {
                 const start = Math.max(w1.start_unix, w2.start_unix);
                 const end   = Math.min(w1.end_unix,   w2.end_unix);
                 if (end - start >= 3600) {
-                    results.push({ date, start_unix: start, end_unix: end, t1_count: w1.player_count, t2_count: w2.player_count });
+                    results.push({ date: d2, start_unix: start, end_unix: end, t1_count: w1.player_count, t2_count: w2.player_count });
                     if (results.length >= max_slots) break;
                 }
             }
@@ -266,11 +274,12 @@ function comparePlayerAvailability(player1_id, player2_id, availability_data, da
     today.setHours(0, 0, 0, 0);
 
     for (let d = 1; d <= days; d++) {
-        const date = new Date(today);
-        date.setDate(today.getDate() + d);
+        const d2 = new Date(today);
+        d2.setDate(today.getDate() + d);
+        const dateStr = toDateStr(d2);
 
-        const p1_wins = findTeamWindowsUTC([player1_id], date, availability_data, 1);
-        const p2_wins = findTeamWindowsUTC([player2_id], date, availability_data, 1);
+        const p1_wins = findTeamWindowsUTC([player1_id], dateStr, availability_data, 1);
+        const p2_wins = findTeamWindowsUTC([player2_id], dateStr, availability_data, 1);
 
         const overlaps = [];
         for (const w1 of p1_wins) {
@@ -283,7 +292,7 @@ function comparePlayerAvailability(player1_id, player2_id, availability_data, da
             }
         }
 
-        results.push({ date, overlaps });
+        results.push({ date: d2, overlaps });
     }
 
     return results;
@@ -320,6 +329,7 @@ module.exports = {
     formatTime,
     formatDate,
     toDateStr,
+    getDayName,
     getPlayerWindows,
     findTeamWindowsUTC,
     findScrimSlots,

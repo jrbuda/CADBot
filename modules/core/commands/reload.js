@@ -4,7 +4,6 @@ module.exports = {
     name: 'reload',
     description: 'Hot-reload all command files without restarting the bot. (Owner only)',
     permission: 'OWNER',
-    num_args: 0,
     options: [],
 
     async execute(message, args, extra) {

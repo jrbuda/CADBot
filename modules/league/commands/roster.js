@@ -9,7 +9,6 @@ module.exports = {
     name: 'roster',
     description: 'View a team\'s roster, or list all teams if no team is specified.',
     permission: 'EVERYONE',
-    num_args: 0,
     options: [
         {
             name: 'team',

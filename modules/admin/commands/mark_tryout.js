@@ -5,7 +5,6 @@ module.exports = {
     description: 'Mark or unmark a player as a tryout.',
     permission: 'ADMIN',
     ephemeral: true,
-    num_args: 0,
     options: [
         {
             name: 'player',

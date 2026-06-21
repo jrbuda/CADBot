@@ -8,7 +8,6 @@ module.exports = {
     description: 'Designate a channel for scrim requests or admin logs.',
     permission: 'ADMIN',
     ephemeral: true,
-    num_args: 0,
     options: [
         {
             name: 'type',

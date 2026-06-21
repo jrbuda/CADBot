@@ -4,7 +4,6 @@ module.exports = {
     name: 'unlink',
     description: 'Unlink your (or another user\'s) League of Legends account.',
     permission: 'EVERYONE',
-    num_args: 0,
     options: [
         {
             name: 'player',

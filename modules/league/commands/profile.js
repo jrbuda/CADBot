@@ -17,7 +17,6 @@ module.exports = {
     description: 'View a linked player\'s League of Legends profile and team info.',
     permission: 'EVERYONE',
     ephemeral: true,
-    num_args: 0,
     options: [
         {
             name: 'player',
@@ -94,7 +93,7 @@ module.exports = {
         // Attempt to fetch ranked stats from Riot API
         if (player.summoner_id) {
             try {
-                const ranked = await getRankedStats(player.summoner_id);
+                const ranked = await getRankedStats(player.summoner_id, this.logger);
                 const solo   = ranked.find(q => q.queueType === 'RANKED_SOLO_5x5');
                 const flex   = ranked.find(q => q.queueType === 'RANKED_FLEX_SR');
 

@@ -13,7 +13,6 @@ module.exports = {
     name: 'opgg',
     description: 'Get op.gg profile or multi-search link for a player or team.',
     permission: 'MEMBER',
-    num_args: 0,
     options: [
         {
             name: 'player',

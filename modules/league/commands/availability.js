@@ -7,7 +7,6 @@ module.exports = {
     description: 'View or manage your availability, or compare two players.',
     permission: 'EVERYONE',
     no_defer: true,
-    num_args: 0,
     options: [
         {
             name: 'player',

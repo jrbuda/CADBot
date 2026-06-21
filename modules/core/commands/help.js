@@ -23,7 +23,6 @@ module.exports = {
     name: 'help',
     description: 'List all available commands with their required permission tier.',
     permission: 'EVERYONE',
-    num_args: 0,
     options: [],
 
     async execute(message, args, extra) {

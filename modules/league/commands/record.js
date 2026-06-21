@@ -7,7 +7,6 @@ module.exports = {
     permission: 'CAPTAIN',
     no_defer: false,
     ephemeral: true,
-    num_args: 0,
     options: [],
 
     async execute(message, args, extra) {

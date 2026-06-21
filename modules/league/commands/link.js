@@ -5,7 +5,6 @@ module.exports = {
     name: 'link',
     description: 'Link your League of Legends account (Riot ID) to your Discord profile.',
     permission: 'EVERYONE',
-    num_args: 0,
     no_defer: true,   // We reply without deferring so we can use a modal
     options: [],
 

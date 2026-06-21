@@ -14,7 +14,6 @@ module.exports = {
     description: 'Create and manage game sessions — customs, tryouts, practice, and more.',
     permission: 'EVERYONE',
     no_defer: false,
-    num_args: 0,
     options: [
         {
             name: 'action',
@@ -173,15 +172,17 @@ module.exports = {
             }
 
             // ── Build Unix timestamp ──────────────────────────────────────────
-            const [y, m, d] = sessionDate.split('-').map(Number);
-            const dateObj   = new Date(y, m - 1, d);   // local midnight (league TZ)
-            let   start_unix = toUnixTimestamp(dateObj, timeMins, timezone);
+            const [y, mo, dy] = sessionDate.split('-').map(Number);
+            let start_unix = toUnixTimestamp(y, mo - 1, dy, timeMins, timezone);
 
             // If time has already passed today, automatically schedule for tomorrow
             if (!dateWasProvided && start_unix < Math.floor(Date.now() / 1000)) {
-                dateObj.setDate(dateObj.getDate() + 1);
-                start_unix  = toUnixTimestamp(dateObj, timeMins, timezone);
-                sessionDate = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(dateObj);
+                const tomorrow = new Date(Date.UTC(y, mo - 1, dy) + 86400000);
+                const tY = tomorrow.getUTCFullYear();
+                const tM = tomorrow.getUTCMonth();
+                const tD = tomorrow.getUTCDate();
+                start_unix  = toUnixTimestamp(tY, tM, tD, timeMins, timezone);
+                sessionDate = `${tY}-${String(tM + 1).padStart(2, '0')}-${String(tD).padStart(2, '0')}`;
             }
 
             // ── Auto-resolve captain's team ───────────────────────────────────

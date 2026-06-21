@@ -8,7 +8,6 @@ module.exports = {
     name: 'assign_player',
     description: 'Assign a player to a team. Optionally promote them to captain.',
     permission: 'ADMIN',
-    num_args: 0,
     options: [
         {
             name: 'player',
@@ -103,7 +102,7 @@ module.exports = {
             }
         }
 
-        // ── Captain promotion ─────────────────────────────────────────────────
+        // ── Captain promotion / demotion ───────────────────────────────────────
         if (makeCaptain) {
             const teams = data.getTeams();
             const previousCaptainId = teams[team_id].captain_id;
@@ -127,6 +126,22 @@ module.exports = {
                     await member.roles.add(config.captain_role_id);
                 } catch (err) {
                     this.logger.warn(`[assign_player] Could not assign captain role: ${err.message}`);
+                }
+            }
+        } else {
+            // If this player is currently the captain of this team, demote them
+            if (team.captain_id === target.id) {
+                const teams = data.getTeams();
+                teams[team_id].captain_id = '';
+                data.saveTeams(teams);
+
+                if (config.captain_role_id) {
+                    try {
+                        const member = await message.guild.members.fetch(target.id);
+                        await member.roles.remove(config.captain_role_id);
+                    } catch (err) {
+                        this.logger.warn(`[assign_player] Could not remove captain role: ${err.message}`);
+                    }
                 }
             }
         }

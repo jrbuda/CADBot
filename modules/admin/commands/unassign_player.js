@@ -4,7 +4,6 @@ module.exports = {
     name: 'unassign_player',
     description: 'Remove a player from their current team.',
     permission: 'ADMIN',
-    num_args: 0,
     options: [
         {
             name: 'player',
@@ -34,6 +33,23 @@ module.exports = {
         players[target.id].team_role = '';
         players[target.id].team_type = '';
         data.savePlayers(players);
+
+        // Clear captain_id if this player was the captain
+        if (team && team.captain_id === target.id) {
+            const teams = data.getTeams();
+            teams[team.id].captain_id = '';
+            data.saveTeams(teams);
+
+            const config = data.getConfig();
+            if (config.captain_role_id) {
+                try {
+                    const member = await message.guild.members.fetch(target.id);
+                    await member.roles.remove(config.captain_role_id);
+                } catch (err) {
+                    this.logger.warn(`[unassign_player] Could not remove captain role: ${err.message}`);
+                }
+            }
+        }
 
         // Remove the team Discord role if configured
         if (team && team.discord_role_id) {

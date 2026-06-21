@@ -5,7 +5,8 @@
   "main": "cadbot.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node cadbot.js"
+    "start": "node cadbot.js",
+    "test": "node --test tests/"
   },
   "dependencies": {
     "axios": "^1.13.2",

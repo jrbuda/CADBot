@@ -61,16 +61,21 @@ class DataManager {
 
     /**
      * Writes data to a JSON file in the data folder and updates the cache.
+     * Uses a temp-file + rename for atomicity so a crash mid-write won't
+     * corrupt the file.
      * @param {string} filename - Without the .json extension
      * @param {Object} data
      */
     write(filename, data) {
         const filepath = path.join(this.data_path, filename + '.json');
+        const tmppath  = filepath + '.tmp';
         try {
-            fs.writeFileSync(filepath, JSON.stringify(data, null, 2), 'utf8');
+            fs.writeFileSync(tmppath, JSON.stringify(data, null, 2), 'utf8');
+            fs.renameSync(tmppath, filepath);
             this._cache[filename] = data;
         } catch (err) {
             this.logger.error('[DataManager] Failed to write ' + filename + '.json: ' + err.message);
+            try { fs.unlinkSync(tmppath); } catch (_) {}
             throw err;
         }
     }

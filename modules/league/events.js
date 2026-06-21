@@ -168,7 +168,7 @@ function register_handlers(event_registry) {
     const client = event_registry.client;
     const POLL_MS = 60 * 1000;
     setInterval(() => {
-        if (!client.isReady || !client.isReady()) return;
+        if (!client.isReady?.()) return;
         checkDueScrims(client).catch(err => logger.error('[scrim scheduler] ' + err.message));
     }, POLL_MS);
     logger.info('[scrim scheduler] Result poller started (60s interval).');
@@ -450,7 +450,7 @@ async function handleLinkModal(interaction) {
     }
 
     try {
-        const { account, summoner } = await lookupRiotId(riotIdRaw);
+        const { account, summoner } = await lookupRiotId(riotIdRaw, logger);
 
         const players = data.getPlayers();
         players[interaction.user.id] = {
@@ -937,12 +937,17 @@ async function handleRecordResultModal(interaction, scrim_id) {
         submitted_by:      interaction.user.id,
         submitted_at:      new Date().toISOString(),
         roster_submitter:  my_team.id,
-        [`roster_${isTeam1 ? 'team1' : 'team2'}`]: rosterIds,
+        players_team1:     isTeam1 ? rosterIds : (scrim.players_team1 || []),
+        players_team2:     isTeam1 ? (scrim.players_team2 || []) : rosterIds,
         notes,
         disputed:          false,
         disputed_by:       null,
         disputed_at:       null,
     };
+
+    if (isTeam1) scrims[scrim_id].players_team1 = rosterIds;
+    else         scrims[scrim_id].players_team2 = rosterIds;
+
     scrims[scrim_id].status = 'completed';
     data.saveScrims(scrims);
 
