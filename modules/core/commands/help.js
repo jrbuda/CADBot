@@ -14,7 +14,7 @@ const TIER_LABEL = {
     OWNER:    'Owner',
     ADMIN:    'Admin',
     CAPTAIN:  'Captain',
-    MEMBER:   'Member',
+    MEMBER:   'Member (assigned to a team)',
     TRYOUT:   'Tryout',
     EVERYONE: 'Everyone',
 };
@@ -53,7 +53,7 @@ module.exports = {
                     .join('\n')
             )
             .setColor(0x5865F2)
-            .setFooter({ text: 'Higher tiers inherit access to lower-tier commands (Admins can use Captain commands, etc.)' })
+            .setFooter({ text: 'Member = linked + assigned to a team via /assign_player. Higher tiers can use all commands below them.' })
             .setTimestamp();
 
         for (const tier of TIER_ORDER) {
