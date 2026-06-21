@@ -42,7 +42,7 @@ const CID = {
     SCRIM_EDIT_MODAL:     'SCRIM_EDIT_MODAL',  // prefix: SCRIM_EDIT_MODAL_<scrim_id>
     RECORD_SELECT:        'RECORD_SCRIM_SELECT',
     RECORD_RESULT_MODAL:  'RECORD_RESULT_MODAL', // prefix: RECORD_RESULT_MODAL_<scrim_id>
-    TRYOUT_INTEREST:      'TRYOUT_INTEREST',   // prefix: TRYOUT_INTEREST_<session_id>
+    GAME_INTEREST:      'GAME_INTEREST',   // prefix: GAME_INTEREST_<session_id>
     FILL_INTEREST:        'FILL_INTEREST',     // prefix: FILL_INTEREST_<scrim_id>
 };
 
@@ -351,8 +351,8 @@ async function handleButton(interaction) {
     }
 
     // ─ Tryout: Express interest ──────────────────────────────────────────────
-    if (id.startsWith('TRYOUT_INTEREST_')) {
-        await handleTryoutInterest(interaction, id.replace('TRYOUT_INTEREST_', ''));
+    if (id.startsWith('GAME_INTEREST_')) {
+        await handleGameInterest(interaction, id.replace('GAME_INTEREST_', ''));
         return;
     }
 
@@ -1117,7 +1117,7 @@ async function handleFillInterest(interaction, scrim_id) {
 
 // ── Implementation: Tryout interest ──────────────────────────────────────────
 
-async function handleTryoutInterest(interaction, session_id) {
+async function handleGameInterest(interaction, session_id) {
     const sessions = data.getSessions();
     const session  = sessions[session_id];
 
