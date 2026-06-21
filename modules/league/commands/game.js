@@ -42,9 +42,9 @@ module.exports = {
         },
         {
             name: 'time',
-            description: '(create) Start time — 7pm, 7:30pm, or 19:00  (required)',
+            description: '(create) Start time — 7pm, 7:30pm, or 19:00',
             type: 'STRING',
-            required: true,
+            required: false,
         },
         {
             name: 'type',
@@ -143,6 +143,12 @@ module.exports = {
             const timezone   = userAvail?.timezone || data.getConfig().timezone || 'America/New_York';
 
             // ── Validate and parse time ───────────────────────────────────────
+            if (!time_input) {
+                await message.channel.send({
+                    content: '❌ A start time is required. Use `time:8pm`, `time:7:30pm`, or `time:19:00`.',
+                });
+                return;
+            }
             const timeMins = parseTime(time_input);
             if (timeMins === null) {
                 await message.channel.send({
