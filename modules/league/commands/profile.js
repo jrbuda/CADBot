@@ -20,37 +20,53 @@ module.exports = {
     options: [
         {
             name: 'player',
-            description: 'Player to look up (defaults to yourself)',
-            type: 'USER',
+            description: 'Player to look up (only shows linked accounts)',
+            type: 'STRING',
             required: false,
+            autocomplete: true,
         },
     ],
+
+    async autocomplete(interaction) {
+        const path = require('path');
+        const DataManager = require('../../../core/js/data_manager.js');
+        const data = new DataManager(path.join(__dirname, '../../../data'), { error: () => {}, info: () => {} });
+
+        const query   = interaction.options.getFocused().toLowerCase();
+        const players = data.getPlayers();
+        const choices = Object.values(players)
+            .filter(p => p.riot_id && p.riot_id.toLowerCase().includes(query))
+            .slice(0, 25)
+            .map(p => ({ name: p.riot_id, value: p.discord_id }));
+
+        await interaction.respond(choices);
+    },
 
     async execute(message, args, extra) {
         const data        = extra.data;
         const interaction = extra.interaction;
 
-        const target   = interaction.options.getUser('player');
-        const targetId = target ? target.id : message.author.id;
+        const target_id = interaction.options.getString('player') || message.author.id;
+        const isSelf    = target_id === message.author.id;
 
-        const player = data.getPlayer(targetId);
+        const player = data.getPlayer(target_id);
         if (!player) {
-            const mention = targetId === message.author.id
-                ? 'You have' : `<@${targetId}> has`;
+            const mention = isSelf ? 'You have' : `<@${target_id}> has`;
             await message.channel.send({ content: `${mention} not linked a League of Legends account. Use \`/link\` to get started.` });
             return;
         }
 
-        const displayName = target
-            ? (target.globalName || target.username)
-            : (message.author.globalName || message.author.username);
+        // Fetch the Discord user for display name and avatar
+        let displayName = isSelf ? (message.author.globalName || message.author.username) : `<@${target_id}>`;
+        let avatarUrl   = isSelf ? (message.author.displayAvatarURL?.({ size: 256 }) ?? null) : null;
+        try {
+            const member = await message.guild.members.fetch(target_id);
+            displayName  = member.displayName || member.user.globalName || member.user.username;
+            avatarUrl    = member.user.displayAvatarURL({ size: 256 });
+        } catch (_) { /* member may have left; fall back to above */ }
 
-        const team        = player.team_id ? data.getTeam(player.team_id) : null;
-        const posEmoji    = POSITION_EMOJI[player.team_role] || '';
-
-        const avatarUrl = (target || message.author).displayAvatarURL
-            ? (target || message.author).displayAvatarURL({ size: 256 })
-            : null;
+        const team     = player.team_id ? data.getTeam(player.team_id) : null;
+        const posEmoji = POSITION_EMOJI[player.team_role] || '';
 
         const embed = new EmbedBuilder()
             .setTitle(displayName)

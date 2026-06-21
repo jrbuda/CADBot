@@ -82,17 +82,60 @@ function getOrCreateAvail(discord_id) {
  * Parses a comma-separated time range string into an array of { start, end } objects.
  * Accepts entries like "7pm-10pm", "19:00-22:00", or "none" / "" for empty.
  */
+/**
+ * Parses a comma-separated list of time ranges (e.g. "7pm-10pm, 19:00-22:00").
+ * Returns { windows, errors } so callers can report exactly what went wrong.
+ *
+ * Accepted formats per time value:  7pm  |  7:30pm  |  19:00  |  7:00 PM
+ * Cross-midnight ranges (8pm-2am) are rejected — Discord's day-based model
+ * can't represent them. Users should split into same-day ranges.
+ */
 function parseTimeRanges(raw) {
-    if (!raw || raw.trim().toLowerCase() === 'none' || raw.trim() === '-') return [];
-    return raw.split(',').map(segment => {
-        const parts = segment.trim().split(/\s*[-–]\s*/);
-        if (parts.length < 2) return null;
-        const startMins = parseTime(parts[0]);
-        const endMins   = parseTime(parts[1]);
-        if (startMins === null || endMins === null || endMins <= startMins) return null;
-        const pad = m => { const h = Math.floor(m/60).toString().padStart(2,'0'); const mn = (m%60).toString().padStart(2,'0'); return `${h}:${mn}`; };
-        return { start: pad(startMins), end: pad(endMins) };
-    }).filter(Boolean);
+    if (!raw || raw.trim().toLowerCase() === 'none' || raw.trim() === '-') {
+        return { windows: [], errors: [] };
+    }
+
+    const windows = [];
+    const errors  = [];
+    const pad     = m => `${Math.floor(m / 60).toString().padStart(2, '0')}:${(m % 60).toString().padStart(2, '0')}`;
+
+    for (const segment of raw.split(',')) {
+        const trimmed = segment.trim();
+        if (!trimmed) continue;
+
+        // Must be exactly "start-end" (one hyphen/en-dash separator)
+        const parts = trimmed.split(/\s*[-–]\s*/);
+        if (parts.length !== 2) {
+            errors.push(`**"${trimmed}"** — expected a start and end separated by a hyphen, e.g. \`7pm-10pm\``);
+            continue;
+        }
+
+        const [rawStart, rawEnd] = parts.map(s => s.trim());
+        const startMins = parseTime(rawStart);
+        const endMins   = parseTime(rawEnd);
+
+        if (startMins === null) {
+            errors.push(`**"${rawStart}"** is not a valid time — use \`7pm\`, \`7:30pm\`, or \`19:00\``);
+            continue;
+        }
+        if (endMins === null) {
+            errors.push(`**"${rawEnd}"** is not a valid time — use \`10pm\`, \`10:30pm\`, or \`22:00\``);
+            continue;
+        }
+        if (endMins < startMins) {
+            // Crossed midnight — e.g. 8pm-2am
+            errors.push(`**"${trimmed}"** crosses midnight. Split it into two entries, e.g. \`8pm-11:59pm\` and add \`12am-2am\` as a separate range`);
+            continue;
+        }
+        if (endMins === startMins) {
+            errors.push(`**"${trimmed}"** — start and end can't be the same time`);
+            continue;
+        }
+
+        windows.push({ start: pad(startMins), end: pad(endMins) });
+    }
+
+    return { windows, errors };
 }
 
 // ── Main event handler registration ──────────────────────────────────────────
@@ -162,7 +205,7 @@ async function handleButton(interaction) {
                 return {
                     id:          d,
                     label:       d.charAt(0).toUpperCase() + d.slice(1),
-                    placeholder: '7pm-10pm, 8pm-11pm — or leave blank',
+                    placeholder: '7pm-10pm  or  19:00-22:00  (comma-separate multiple)',
                     style:       TextInputStyle.Short,
                     required:    false,
                     value:       existing,
@@ -184,7 +227,7 @@ async function handleButton(interaction) {
                 return {
                     id:          d,
                     label:       d.charAt(0).toUpperCase() + d.slice(1),
-                    placeholder: '1pm-8pm — or leave blank',
+                    placeholder: '1pm-8pm  or  13:00-20:00  (comma-separate multiple)',
                     style:       TextInputStyle.Short,
                     required:    false,
                     value:       existing,
@@ -449,43 +492,68 @@ async function handleLinkModal(interaction) {
 // ── Implementation: Availability ─────────────────────────────────────────────
 
 async function handleAvailWeekdaysModal(interaction) {
-    const days  = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
     const { availability, avail } = getOrCreateAvail(interaction.user.id);
 
+    const allErrors = [];
     for (const day of days) {
         try {
             const raw = interaction.fields.getTextInputValue(day);
-            avail.weekly[day] = parseTimeRanges(raw);
+            const { windows, errors } = parseTimeRanges(raw);
+            if (errors.length > 0) {
+                const label = day.charAt(0).toUpperCase() + day.slice(1);
+                allErrors.push(`**${label}**:\n${errors.map(e => `  • ${e}`).join('\n')}`);
+                // Keep the day's existing windows unchanged on error
+            } else {
+                avail.weekly[day] = windows;
+            }
         } catch (_) {
             avail.weekly[day] = [];
         }
     }
 
     data.saveAvailability(availability);
-    await interaction.reply({
-        content: '✅ Weekday availability updated!\n\n' + formatWeeklySchedule(avail),
-        flags: MessageFlags.Ephemeral,
-    });
+
+    let content = (allErrors.length === 0 ? '✅ Weekday availability saved!' : '⚠️ Some entries were saved, but the following were rejected:')
+        + '\n\n' + formatWeeklySchedule(avail);
+    if (allErrors.length > 0) {
+        content += '\n\n**Rejected entries:**\n' + allErrors.join('\n');
+        content += '\n\n**Accepted formats:** `7pm-10pm` · `7:30pm-10:30pm` · `19:00-22:00`\nCross-midnight ranges (e.g. `8pm-2am`) must be split at midnight.';
+    }
+
+    await interaction.reply({ content, flags: MessageFlags.Ephemeral });
 }
 
 async function handleAvailWeekendModal(interaction) {
-    const days  = ['saturday', 'sunday'];
+    const days = ['saturday', 'sunday'];
     const { availability, avail } = getOrCreateAvail(interaction.user.id);
 
+    const allErrors = [];
     for (const day of days) {
         try {
             const raw = interaction.fields.getTextInputValue(day);
-            avail.weekly[day] = parseTimeRanges(raw);
+            const { windows, errors } = parseTimeRanges(raw);
+            if (errors.length > 0) {
+                const label = day.charAt(0).toUpperCase() + day.slice(1);
+                allErrors.push(`**${label}**:\n${errors.map(e => `  • ${e}`).join('\n')}`);
+            } else {
+                avail.weekly[day] = windows;
+            }
         } catch (_) {
             avail.weekly[day] = [];
         }
     }
 
     data.saveAvailability(availability);
-    await interaction.reply({
-        content: '✅ Weekend availability updated!\n\n' + formatWeeklySchedule(avail),
-        flags: MessageFlags.Ephemeral,
-    });
+
+    let content = (allErrors.length === 0 ? '✅ Weekend availability saved!' : '⚠️ Some entries were saved, but the following were rejected:')
+        + '\n\n' + formatWeeklySchedule(avail);
+    if (allErrors.length > 0) {
+        content += '\n\n**Rejected entries:**\n' + allErrors.join('\n');
+        content += '\n\n**Accepted formats:** `7pm-10pm` · `7:30pm-10:30pm` · `19:00-22:00`';
+    }
+
+    await interaction.reply({ content, flags: MessageFlags.Ephemeral });
 }
 
 async function handleAvailOverrideModal(interaction) {
@@ -493,16 +561,24 @@ async function handleAvailOverrideModal(interaction) {
     const timesRaw = interaction.fields.getTextInputValue('override_times').trim();
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-        await interaction.reply({ content: 'Invalid date format. Use YYYY-MM-DD.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: '❌ Invalid date format. Use `YYYY-MM-DD`, e.g. `2025-07-04`.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     const { availability, avail } = getOrCreateAvail(interaction.user.id);
 
     if (timesRaw.toLowerCase() === 'none') {
-        avail.overrides[dateStr] = null;  // null = explicitly unavailable
+        avail.overrides[dateStr] = null;
     } else {
-        const windows = parseTimeRanges(timesRaw);
+        const { windows, errors } = parseTimeRanges(timesRaw);
+        if (errors.length > 0) {
+            await interaction.reply({
+                content: `❌ Override not saved — fix these errors and try again:\n${errors.map(e => `• ${e}`).join('\n')}`
+                    + '\n\n**Accepted formats:** `7pm-10pm` · `7:30pm-10:30pm` · `19:00-22:00`\nCross-midnight ranges must be split at midnight.',
+                flags: MessageFlags.Ephemeral,
+            });
+            return;
+        }
         avail.overrides[dateStr] = windows.length > 0 ? windows : null;
     }
 
