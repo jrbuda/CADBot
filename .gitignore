@@ -1,0 +1,10 @@
+# Compiled output
+node_modules/
+logs/
+
+# Environment variables — NEVER commit this
+.env
+
+# OS
+.DS_Store
+Thumbs.db
