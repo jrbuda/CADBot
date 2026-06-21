@@ -1,5 +1,5 @@
 'use strict';
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
 
 module.exports = {
     name: 'link',
@@ -28,6 +28,6 @@ module.exports = {
             .setColor(0xC89B3C)
             .setFooter({ text: 'Your Riot ID is your in-game name and tag.' });
 
-        await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+        await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
     },
 };

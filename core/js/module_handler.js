@@ -245,7 +245,7 @@ class ModuleHandler {
         // Defer reply unless the command handles its own response (e.g., modal-first commands)
         if (!current_command.no_defer) {
             try {
-                const defer_opts = current_command.ephemeral ? { ephemeral: true } : {};
+                const defer_opts = current_command.ephemeral ? { flags: MessageFlags.Ephemeral } : {};
                 await interaction.deferReply(defer_opts);
             } catch (err) {
                 this.logger.error('[Slash] deferReply failed for /' + slashName + ': ' + err.message);

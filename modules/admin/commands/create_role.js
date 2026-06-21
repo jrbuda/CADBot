@@ -51,7 +51,7 @@ module.exports = {
         try {
             const role = await message.guild.roles.create({
                 name,
-                color:       color || 0,
+                colors:      color ? [color] : undefined,
                 hoist,
                 mentionable,
                 reason:      `Created by ${message.author.tag} via /create_role`,

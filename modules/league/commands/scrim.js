@@ -1,6 +1,6 @@
 'use strict';
 const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
-const { findScrimSlots, formatDate, formatTime, toUnixTimestamp } = require('../lib/availability_utils.js');
+const { findScrimSlots, formatDate } = require('../lib/availability_utils.js');
 const { randomUUID } = require('crypto');
 
 // In-memory cache: scrim slot selections pending captain confirmation
@@ -124,11 +124,17 @@ module.exports = {
         // Auto-expire cache entry after 15 minutes
         setTimeout(() => pendingSlots.delete(cache_id), 15 * 60 * 1000);
 
-        // Build the select menu
+        // Build the select menu — labels use plain text; the embed uses <t:> for localisation
         const options = slots.map((slot, i) => {
-            const unix  = toUnixTimestamp(slot.date, slot.start, timezone);
-            const label = `${formatDate(slot.date)} — ${formatTime(slot.start)}–${formatTime(slot.end)}`;
-            const desc  = `${my_team.name}: ${slot.t1_count} players · ${opp_team.name}: ${slot.t2_count} players`;
+            const tz = data.getConfig().timezone || 'America/New_York';
+            const startDate = new Date(slot.start_unix * 1000);
+            const endDate   = new Date(slot.end_unix   * 1000);
+            const fmtOpts   = { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true };
+            const dateStr   = startDate.toLocaleDateString('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric' });
+            const startStr  = startDate.toLocaleTimeString('en-US', fmtOpts);
+            const endStr    = endDate.toLocaleTimeString('en-US', fmtOpts);
+            const label     = `${dateStr} — ${startStr}–${endStr}`;
+            const desc      = `${my_team.name}: ${slot.t1_count} · ${opp_team.name}: ${slot.t2_count} players`;
             return new StringSelectMenuOptionBuilder()
                 .setLabel(label.substring(0, 100))
                 .setDescription(desc.substring(0, 100))
@@ -151,7 +157,7 @@ module.exports = {
                 (allow_fill   ? '✅ Fill interest enabled' : '')
             )
             .setColor(0xC89B3C)
-            .setFooter({ text: `All times in ${timezone}` });
+            .setFooter({ text: `Slot times shown in ${data.getConfig().timezone || 'America/New_York'} (league timezone). Scrim request uses Discord timestamps visible in your local time.` });
 
         await message.channel.send({ embeds: [embed], components: [row] });
         this.logger.info(`[scrim] ${message.author.id} opened scrim request ${my_team.name} vs ${opp_team.name}`);

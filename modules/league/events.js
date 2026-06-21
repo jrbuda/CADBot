@@ -4,10 +4,11 @@ const {
     ActionRowBuilder, ButtonBuilder, ButtonStyle,
     EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
     GuildScheduledEventEntityType, GuildScheduledEventPrivacyLevel,
+    MessageFlags,
 } = require('discord.js');
 
 const { lookupRiotId } = require('./lib/riot_api.js');
-const { formatDate, formatTime, toUnixTimestamp, DAY_NAMES, parseTime, formatWeeklySchedule } = require('./lib/availability_utils.js');
+const { formatDate, formatTime, toUnixTimestamp, DAY_NAMES, parseTime, formatWeeklySchedule, TIMEZONE_OPTIONS } = require('./lib/availability_utils.js');
 const { randomUUID }  = require('crypto');
 
 // These are assigned from the shared core singletons in register_handlers().
@@ -29,6 +30,8 @@ const CID = {
     AVAIL_WEEKDAYS_MODAL: 'AVAIL_WEEKDAYS_MODAL',
     AVAIL_WEEKEND_MODAL:  'AVAIL_WEEKEND_MODAL',
     AVAIL_OVERRIDE_MODAL: 'AVAIL_OVERRIDE_MODAL',
+    AVAIL_SET_TZ:         'AVAIL_SET_TZ',
+    AVAIL_TZ_SELECT:      'AVAIL_TZ_SELECT',
     SCRIM_SLOT_SELECT:    'SCRIM_SLOT_SELECT',
     SCRIM_ACCEPT:         'SCRIM_ACCEPT',      // prefix: SCRIM_ACCEPT_<scrim_id>
     SCRIM_DECLINE:        'SCRIM_DECLINE',     // prefix: SCRIM_DECLINE_<scrim_id>
@@ -107,7 +110,7 @@ function register_handlers(event_registry) {
         } catch (err) {
             logger.error('[league/events] Unhandled error: ' + err.message + '\n' + err.stack);
             try {
-                const errMsg = { content: 'An error occurred. Please try again.', ephemeral: true };
+                const errMsg = { content: 'An error occurred. Please try again.', flags: MessageFlags.Ephemeral };
                 if (interaction.replied || interaction.deferred) await interaction.followUp(errMsg);
                 else await interaction.reply(errMsg);
             } catch (_) {}
@@ -223,7 +226,7 @@ async function handleButton(interaction) {
             .sort(([a], [b]) => a.localeCompare(b));
 
         if (overrides.length === 0) {
-            await interaction.reply({ content: 'You have no upcoming date overrides.', ephemeral: true });
+            await interaction.reply({ content: 'You have no upcoming date overrides.', flags: MessageFlags.Ephemeral });
             return;
         }
 
@@ -235,7 +238,7 @@ async function handleButton(interaction) {
 
         await interaction.reply({
             content: '**Your upcoming date overrides:**\n' + lines.join('\n'),
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
         });
         return;
     }
@@ -245,7 +248,28 @@ async function handleButton(interaction) {
         const availability = data.getAvailability();
         delete availability[interaction.user.id];
         data.saveAvailability(availability);
-        await interaction.reply({ content: 'Your availability has been cleared.', ephemeral: true });
+        await interaction.reply({ content: 'Your availability has been cleared.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    // ─ Availability: Set timezone button → shows select menu ─────────────────
+    if (id === CID.AVAIL_SET_TZ) {
+        const select = new StringSelectMenuBuilder()
+            .setCustomId(CID.AVAIL_TZ_SELECT)
+            .setPlaceholder('Select your timezone...')
+            .addOptions(TIMEZONE_OPTIONS.map(tz =>
+                new StringSelectMenuOptionBuilder()
+                    .setLabel(tz.label)
+                    .setDescription(tz.description)
+                    .setValue(tz.value)
+            ));
+
+        const row = new ActionRowBuilder().addComponents(select);
+        await interaction.reply({
+            content: 'Select your timezone. Times you enter in availability modals will be interpreted in this timezone.',
+            components: [row],
+            flags: MessageFlags.Ephemeral,
+        });
         return;
     }
 
@@ -343,6 +367,20 @@ async function handleModal(interaction) {
 async function handleSelect(interaction) {
     const id = interaction.customId;
 
+    // ─ Timezone selected ─────────────────────────────────────────────────────
+    if (id === CID.AVAIL_TZ_SELECT) {
+        const tz = interaction.values[0];
+        const tzLabel = TIMEZONE_OPTIONS.find(o => o.value === tz)?.label || tz;
+        const { availability, avail } = getOrCreateAvail(interaction.user.id);
+        avail.timezone = tz;
+        data.saveAvailability(availability);
+        await interaction.update({
+            content: `✅ Your timezone has been set to **${tzLabel}**.\nAll times you enter in availability modals will be interpreted as ${tz}.`,
+            components: [],
+        });
+        return;
+    }
+
     // ─ Scrim slot selected ───────────────────────────────────────────────────
     if (id === CID.SCRIM_SLOT_SELECT) {
         await handleScrimSlotSelect(interaction);
@@ -359,7 +397,7 @@ async function handleSelect(interaction) {
 // ── Implementation: Link ──────────────────────────────────────────────────────
 
 async function handleLinkModal(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const riotIdRaw = interaction.fields.getTextInputValue('riot_id_input').trim();
 
@@ -426,7 +464,7 @@ async function handleAvailWeekdaysModal(interaction) {
     data.saveAvailability(availability);
     await interaction.reply({
         content: '✅ Weekday availability updated!\n\n' + formatWeeklySchedule(avail),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
     });
 }
 
@@ -446,7 +484,7 @@ async function handleAvailWeekendModal(interaction) {
     data.saveAvailability(availability);
     await interaction.reply({
         content: '✅ Weekend availability updated!\n\n' + formatWeeklySchedule(avail),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
     });
 }
 
@@ -455,7 +493,7 @@ async function handleAvailOverrideModal(interaction) {
     const timesRaw = interaction.fields.getTextInputValue('override_times').trim();
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-        await interaction.reply({ content: 'Invalid date format. Use YYYY-MM-DD.', ephemeral: true });
+        await interaction.reply({ content: 'Invalid date format. Use YYYY-MM-DD.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -474,7 +512,7 @@ async function handleAvailOverrideModal(interaction) {
         ? `You are marked as **unavailable** on \`${dateStr}\`.`
         : `Override set for \`${dateStr}\`: ${avail.overrides[dateStr].map(w => `${w.start}–${w.end}`).join(', ')}`;
 
-    await interaction.reply({ content: '✅ ' + label, ephemeral: true });
+    await interaction.reply({ content: '✅ ' + label, flags: MessageFlags.Ephemeral });
 }
 
 // ── Implementation: Scrim slot selection ──────────────────────────────────────
@@ -491,19 +529,19 @@ async function handleScrimSlotSelect(interaction) {
     try {
         pendingSlots = require('./commands/scrim.js').pendingSlots;
     } catch (_) {
-        await interaction.followUp({ content: 'Session expired. Please run `/scrim` again.', ephemeral: true });
+        await interaction.followUp({ content: 'Session expired. Please run `/scrim` again.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     const cached = pendingSlots.get(cache_id);
     if (!cached) {
-        await interaction.followUp({ content: 'This scrim request has expired. Please run `/scrim` again.', ephemeral: true });
+        await interaction.followUp({ content: 'This scrim request has expired. Please run `/scrim` again.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     // Verify the person selecting is the one who ran the command
     if (interaction.user.id !== cached.requested_by) {
-        await interaction.followUp({ content: 'Only the captain who requested this scrim can select a time.', ephemeral: true });
+        await interaction.followUp({ content: 'Only the captain who requested this scrim can select a time.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -513,20 +551,20 @@ async function handleScrimSlotSelect(interaction) {
     const config   = data.getConfig();
 
     if (!team1 || !team2) {
-        await interaction.followUp({ content: 'One of the teams was not found.', ephemeral: true });
+        await interaction.followUp({ content: 'One of the teams was not found.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     if (!config.scrim_channel_id) {
-        await interaction.followUp({ content: 'No scrim channel configured. Admins must use `/set_channel` first.', ephemeral: true });
+        await interaction.followUp({ content: 'No scrim channel configured. Admins must use `/set_channel` first.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     // Create a pending scrim record
     const scrim_id = randomUUID();
     const timezone = cached.timezone || 'America/New_York';
-    const unix     = toUnixTimestamp(slot.date, slot.start, timezone);
-    const unix_end = toUnixTimestamp(slot.date, slot.end,   timezone);
+    const unix     = slot.start_unix;   // already UTC from the availability engine
+    const unix_end = slot.end_unix;
 
     const scrims = data.getScrims();
     scrims[scrim_id] = {
@@ -555,7 +593,7 @@ async function handleScrimSlotSelect(interaction) {
     // Post in scrim channel
     const scrimChannel = await interaction.guild.channels.fetch(config.scrim_channel_id).catch(() => null);
     if (!scrimChannel) {
-        await interaction.followUp({ content: 'Scrim channel not found. Contact an admin.', ephemeral: true });
+        await interaction.followUp({ content: 'Scrim channel not found. Contact an admin.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -607,7 +645,7 @@ async function handleScrimAccept(interaction, scrim_id) {
     const scrims = data.getScrims();
     const scrim  = scrims[scrim_id];
     if (!scrim || scrim.status !== 'pending') {
-        await interaction.reply({ content: 'This scrim request is no longer pending.', ephemeral: true });
+        await interaction.reply({ content: 'This scrim request is no longer pending.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -615,7 +653,7 @@ async function handleScrimAccept(interaction, scrim_id) {
     // Only captain of team2 can accept
     if (!team2 || (team2.captain_id && interaction.user.id !== team2.captain_id)) {
         if (!perms.check('ADMIN', interaction.member, interaction.user.id)) {
-            await interaction.reply({ content: 'Only the opposing captain can accept this request.', ephemeral: true });
+            await interaction.reply({ content: 'Only the opposing captain can accept this request.', flags: MessageFlags.Ephemeral });
             return;
         }
     }
@@ -688,14 +726,14 @@ async function handleScrimDecline(interaction, scrim_id) {
     const scrims = data.getScrims();
     const scrim  = scrims[scrim_id];
     if (!scrim || scrim.status !== 'pending') {
-        await interaction.reply({ content: 'This scrim request is no longer pending.', ephemeral: true });
+        await interaction.reply({ content: 'This scrim request is no longer pending.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     const team2 = data.getTeam(scrim.team2_id);
     if (!team2 || (team2.captain_id && interaction.user.id !== team2.captain_id)) {
         if (!perms.check('ADMIN', interaction.member, interaction.user.id)) {
-            await interaction.reply({ content: 'Only the opposing captain can decline this request.', ephemeral: true });
+            await interaction.reply({ content: 'Only the opposing captain can decline this request.', flags: MessageFlags.Ephemeral });
             return;
         }
     }
@@ -733,13 +771,13 @@ async function handleRecordScrimSelect(interaction) {
     const scrim_id = interaction.values[0];
     const scrim    = data.getScrim(scrim_id);
     if (!scrim) {
-        await interaction.reply({ content: 'Scrim not found.', ephemeral: true });
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     const my_team = data.getTeamByCaptain(interaction.user.id);
     if (!my_team) {
-        await interaction.reply({ content: 'You are not a captain of any team.', ephemeral: true });
+        await interaction.reply({ content: 'You are not a captain of any team.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -782,7 +820,7 @@ async function handleRecordScrimSelect(interaction) {
 }
 
 async function handleRecordResultModal(interaction, scrim_id) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const outcome   = interaction.fields.getTextInputValue('outcome').trim().toLowerCase();
     const rosterRaw = interaction.fields.getTextInputValue('roster').trim();
@@ -893,12 +931,12 @@ async function handleScrimDispute(interaction, scrim_id) {
     const scrims = data.getScrims();
     const scrim  = scrims[scrim_id];
     if (!scrim || !scrim.result) {
-        await interaction.reply({ content: 'No result found to dispute.', ephemeral: true });
+        await interaction.reply({ content: 'No result found to dispute.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     if (scrim.result.disputed) {
-        await interaction.reply({ content: 'This result has already been disputed.', ephemeral: true });
+        await interaction.reply({ content: 'This result has already been disputed.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -908,7 +946,7 @@ async function handleScrimDispute(interaction, scrim_id) {
     );
     if (opp_team?.captain_id && interaction.user.id !== opp_team.captain_id) {
         if (!perms.check('ADMIN', interaction.member, interaction.user.id)) {
-            await interaction.reply({ content: 'Only the opposing captain can dispute this result.', ephemeral: true });
+            await interaction.reply({ content: 'Only the opposing captain can dispute this result.', flags: MessageFlags.Ephemeral });
             return;
         }
     }
@@ -954,13 +992,13 @@ async function handleFillInterest(interaction, scrim_id) {
     const scrims = data.getScrims();
     const scrim  = scrims[scrim_id];
     if (!scrim) {
-        await interaction.reply({ content: 'Scrim not found.', ephemeral: true });
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     // Fill interest only makes sense while the scrim is still live.
     if (scrim.status === 'declined' || scrim.status === 'completed' || scrim.status === 'disputed') {
-        await interaction.reply({ content: 'This scrim is no longer accepting fill interest.', ephemeral: true });
+        await interaction.reply({ content: 'This scrim is no longer accepting fill interest.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -969,14 +1007,14 @@ async function handleFillInterest(interaction, scrim_id) {
     // The fill button is intended for members OUTSIDE either scrimming team.
     const player = data.getPlayer(uid);
     if (player && (player.team_id === scrim.team1_id || player.team_id === scrim.team2_id)) {
-        await interaction.reply({ content: "You're already on one of the teams in this scrim.", ephemeral: true });
+        await interaction.reply({ content: "You're already on one of the teams in this scrim.", flags: MessageFlags.Ephemeral });
         return;
     }
 
     if (!scrim.fill_interests) scrim.fill_interests = [];
 
     if (scrim.fill_interests.includes(uid)) {
-        await interaction.reply({ content: "You've already marked interest in this scrim.", ephemeral: true });
+        await interaction.reply({ content: "You've already marked interest in this scrim.", flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -985,7 +1023,7 @@ async function handleFillInterest(interaction, scrim_id) {
 
     await interaction.reply({
         content: `✅ You've been added to the fill interest list for this scrim. Captains have been notified.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
     });
 
     // Notify both captains
@@ -1008,7 +1046,7 @@ async function handleTryoutInterest(interaction, session_id) {
     const session  = sessions[session_id];
 
     if (!session || session.status === 'closed') {
-        await interaction.reply({ content: 'This session is no longer accepting interest.', ephemeral: true });
+        await interaction.reply({ content: 'This session is no longer accepting interest.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -1020,12 +1058,12 @@ async function handleTryoutInterest(interaction, session_id) {
 
     if (open_to === 'tryout') {
         if (!perms.check('TRYOUT', interaction.member, uid)) {
-            await interaction.reply({ content: 'This session is only open to players with the tryout role.', ephemeral: true });
+            await interaction.reply({ content: 'This session is only open to players with the tryout role.', flags: MessageFlags.Ephemeral });
             return;
         }
     } else if (open_to === 'member') {
         if (!perms.check('MEMBER', interaction.member, uid)) {
-            await interaction.reply({ content: 'This session is only open to team members.', ephemeral: true });
+            await interaction.reply({ content: 'This session is only open to team members.', flags: MessageFlags.Ephemeral });
             return;
         }
     }
@@ -1035,7 +1073,7 @@ async function handleTryoutInterest(interaction, session_id) {
         // Toggle off
         sessions[session_id].interested = session.interested.filter(id => id !== uid);
         data.saveSessions(sessions);
-        await interaction.reply({ content: "You've been removed from the interest list.", ephemeral: true });
+        await interaction.reply({ content: "You've been removed from the interest list.", flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -1044,7 +1082,7 @@ async function handleTryoutInterest(interaction, session_id) {
 
     await interaction.reply({
         content: `✅ You've been added to the interest list for **${session.name}**! An admin will reach out if you're selected.`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
     });
 
     logger.info(`[tryout] ${uid} expressed interest in session ${session_id}`);
@@ -1166,11 +1204,11 @@ async function handleScrimWinButton(interaction, scrim_id, teamNum) {
     const scrims = data.getScrims();
     const scrim  = scrims[scrim_id];
     if (!scrim) {
-        await interaction.reply({ content: 'Scrim not found.', ephemeral: true });
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
         return;
     }
     if (scrim.result) {
-        await interaction.reply({ content: 'A result has already been recorded for this scrim. Use Dispute if it is wrong.', ephemeral: true });
+        await interaction.reply({ content: 'A result has already been recorded for this scrim. Use Dispute if it is wrong.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -1180,7 +1218,7 @@ async function handleScrimWinButton(interaction, scrim_id, teamNum) {
     // Only a captain of either team or an admin may record
     const isCaptain = interaction.user.id === team1?.captain_id || interaction.user.id === team2?.captain_id;
     if (!isCaptain && !perms.check('ADMIN', interaction.member, interaction.user.id)) {
-        await interaction.reply({ content: 'Only a team captain or an admin can record the result.', ephemeral: true });
+        await interaction.reply({ content: 'Only a team captain or an admin can record the result.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -1228,7 +1266,7 @@ async function handleScrimWinButton(interaction, scrim_id, teamNum) {
 async function handleScrimEditButton(interaction, scrim_id) {
     const scrim = data.getScrim(scrim_id);
     if (!scrim) {
-        await interaction.reply({ content: 'Scrim not found.', ephemeral: true });
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -1240,7 +1278,7 @@ async function handleScrimEditButton(interaction, scrim_id) {
     else if (interaction.user.id === team2?.captain_id) which = 2;
     else if (perms.check('ADMIN', interaction.member, interaction.user.id)) which = 1; // admin defaults to team 1
     else {
-        await interaction.reply({ content: 'Only a team captain (or admin) can edit the players.', ephemeral: true });
+        await interaction.reply({ content: 'Only a team captain (or admin) can edit the players.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -1273,7 +1311,7 @@ async function handleScrimEditModal(interaction, rawId) {
     const scrims = data.getScrims();
     const scrim  = scrims[scrim_id];
     if (!scrim) {
-        await interaction.followUp({ content: 'Scrim not found.', ephemeral: true });
+        await interaction.followUp({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
         return;
     }
 
@@ -1292,7 +1330,7 @@ async function handleScrimEditModal(interaction, rawId) {
     try {
         await interaction.editReply(payload);
     } catch (_) {
-        await interaction.followUp({ content: 'Players updated.', ephemeral: true });
+        await interaction.followUp({ content: 'Players updated.', flags: MessageFlags.Ephemeral });
     }
 
     logger.info(`[scrim] Players edited for scrim ${scrim_id} (team ${which}) by ${interaction.user.id}`);
