@@ -1,6 +1,7 @@
 'use strict';
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } = require('discord.js');
 const { randomUUID } = require('crypto');
+const { parseTime, toUnixTimestamp } = require('../lib/availability_utils.js');
 
 const SESSION_TYPES = [
     { name: 'Tryout',      value: 'tryout'      },
@@ -35,15 +36,15 @@ module.exports = {
         },
         {
             name: 'date',
-            description: '(create) Date — YYYY-MM-DD',
+            description: '(create) Date — YYYY-MM-DD. Defaults to today in your timezone.',
             type: 'STRING',
             required: false,
         },
         {
             name: 'time',
-            description: '(create) Start time — 7pm or 19:00',
+            description: '(create) Start time — 7pm, 7:30pm, or 19:00  (required)',
             type: 'STRING',
-            required: false,
+            required: true,
         },
         {
             name: 'type',
@@ -108,7 +109,7 @@ module.exports = {
             const choices  = Object.values(sessions)
                 .filter(s => s.status !== 'closed' && s.name.toLowerCase().includes(query))
                 .slice(0, 25)
-                .map(s => ({ name: `${s.name} (${s.date})`, value: s.id }));
+                .map(s => ({ name: `${s.name} (${s.date || '?'})`, value: s.id }));
             await interaction.respond(choices);
         }
     },
@@ -130,46 +131,77 @@ module.exports = {
             }
 
             const name_input = interaction.options.getString('name')?.trim();
-            const date       = interaction.options.getString('date');
-            const time       = interaction.options.getString('time');
+            const date_input = interaction.options.getString('date');
+            const time_input = interaction.options.getString('time');
             const spots      = interaction.options.getInteger('spots')   ?? 10;
             const type       = interaction.options.getString('type')     || 'custom_game';
             const open_to    = interaction.options.getString('open_to')  || 'member';
             let   team_id    = interaction.options.getString('team')     || null;
 
-            if (!date || !time) {
-                await message.channel.send({ content: 'Please provide a `date` (YYYY-MM-DD) and `time`.' });
-                return;
-            }
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-                await message.channel.send({ content: 'Invalid date — use `YYYY-MM-DD`, e.g. `2025-07-15`.' });
+            // ── Resolve user timezone ─────────────────────────────────────────
+            const userAvail  = data.getAvailability()[message.author.id];
+            const timezone   = userAvail?.timezone || data.getConfig().timezone || 'America/New_York';
+
+            // ── Validate and parse time ───────────────────────────────────────
+            const timeMins = parseTime(time_input);
+            if (timeMins === null) {
+                await message.channel.send({
+                    content: `❌ **"${time_input}"** is not a valid time.\nUse formats like \`7pm\`, \`7:30pm\`, or \`19:00\`.`,
+                });
                 return;
             }
 
-            // Captains: auto-resolve their team if not specified
-            if (!team_id && permissions.check('CAPTAIN', message.member, message.author.id)) {
+            // ── Resolve date ──────────────────────────────────────────────────
+            let sessionDate;
+            let dateWasProvided = !!date_input;
+
+            if (date_input) {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(date_input)) {
+                    await message.channel.send({ content: 'Invalid date — use `YYYY-MM-DD`, e.g. `2025-07-15`.' });
+                    return;
+                }
+                sessionDate = date_input;
+            } else {
+                // Default to today in the user's timezone
+                sessionDate = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+            }
+
+            // ── Build Unix timestamp ──────────────────────────────────────────
+            const [y, m, d] = sessionDate.split('-').map(Number);
+            const dateObj   = new Date(y, m - 1, d);   // local midnight (league TZ)
+            let   start_unix = toUnixTimestamp(dateObj, timeMins, timezone);
+
+            // If time has already passed today, automatically schedule for tomorrow
+            if (!dateWasProvided && start_unix < Math.floor(Date.now() / 1000)) {
+                dateObj.setDate(dateObj.getDate() + 1);
+                start_unix  = toUnixTimestamp(dateObj, timeMins, timezone);
+                sessionDate = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(dateObj);
+            }
+
+            // ── Auto-resolve captain's team ───────────────────────────────────
+            if (!team_id) {
                 const captainTeam = data.getTeamByCaptain(message.author.id);
                 if (captainTeam) team_id = captainTeam.id;
             }
 
-            const sessions   = data.getSessions();
-            const session_id = randomUUID();
-            const name       = name_input || `Gaming Session #${Object.keys(sessions).length + 1}`;
-
-            // Resolve the destination channel:
-            // use the team's configured game channel, fall back to current channel
+            // ── Resolve destination channel ───────────────────────────────────
             let dest_channel_id = message.channel.id;
             if (team_id) {
                 const team = data.getTeam(team_id);
                 if (team?.channels?.game) dest_channel_id = team.channels.game;
             }
 
+            // ── Persist session ───────────────────────────────────────────────
+            const sessions   = data.getSessions();
+            const session_id = randomUUID();
+            const name       = name_input || `Gaming Session #${Object.keys(sessions).length + 1}`;
+
             sessions[session_id] = {
                 id:          session_id,
                 type,
                 name,
-                date,
-                time,
+                date:        sessionDate,
+                start_unix,
                 spots,
                 open_to,
                 team_id:     team_id || '',
@@ -182,15 +214,18 @@ module.exports = {
             };
             data.saveSessions(sessions);
 
+            // ── Build embed ───────────────────────────────────────────────────
             const typeLabel = SESSION_TYPES.find(t => t.value === type)?.name || type;
             const team      = team_id ? data.getTeam(team_id) : null;
 
             const embed = new EmbedBuilder()
                 .setTitle(`${typeLabel} — ${name}`)
                 .setDescription(
-                    `📅 **Date:** ${date}\n⏰ **Time:** ${time}\n` +
-                    `🎮 **Type:** ${typeLabel}\n👥 **Spots:** ${spots}\n` +
-                    (team ? `👥 **Team:** ${team.name}\n` : '') +
+                    `📅 <t:${start_unix}:F>\n` +
+                    `🕐 <t:${start_unix}:R>\n` +
+                    `🎮 **Type:** ${typeLabel}\n` +
+                    `👥 **Spots:** ${spots}\n` +
+                    (team ? `🛡️ **Team:** ${team.name}\n` : '') +
                     `👋 **Open to:** ${open_to === 'member' ? 'Team members' : open_to === 'tryout' ? 'Tryouts' : 'Anyone'}\n\n` +
                     `Click below if you're in!`
                 )
@@ -205,7 +240,7 @@ module.exports = {
                     .setStyle(ButtonStyle.Success),
             );
 
-            // Post to team game channel (or current channel)
+            // ── Post ──────────────────────────────────────────────────────────
             let posted;
             try {
                 const destCh = dest_channel_id !== message.channel.id
@@ -224,8 +259,10 @@ module.exports = {
             const routeNote = dest_channel_id !== message.channel.id
                 ? ` → posted to <#${dest_channel_id}>`
                 : '';
-            await message.channel.send({ content: `Session **${name}** created!${routeNote}` });
-            this.logger.info(`[game] Session created: ${name} (${session_id})`);
+            await message.channel.send({
+                content: `Session **${name}** created for <t:${start_unix}:F>!${routeNote}`,
+            });
+            this.logger.info(`[game] Session created: ${name} (${session_id}) at unix ${start_unix}`);
             return;
         }
 
@@ -245,10 +282,13 @@ module.exports = {
                 .setTimestamp();
 
             for (const s of open.slice(0, 10)) {
-                const team = s.team_id ? data.getTeam(s.team_id) : null;
+                const team    = s.team_id ? data.getTeam(s.team_id) : null;
+                const timeStr = s.start_unix
+                    ? `<t:${s.start_unix}:f>`
+                    : `${s.date || '?'}`;
                 embed.addFields({
                     name:  s.name,
-                    value: `📅 ${s.date} ${s.time}${team ? ` · ${team.name}` : ''} | 👥 ${s.interested.length}/${s.spots} | ID: \`${s.id.substring(0, 8)}\``,
+                    value: `📅 ${timeStr}${team ? ` · ${team.name}` : ''} | 👥 ${s.interested.length}/${s.spots} | ID: \`${s.id.substring(0, 8)}\``,
                 });
             }
 
