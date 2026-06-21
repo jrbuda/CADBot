@@ -5,6 +5,17 @@ logs/
 # Environment variables — NEVER commit this
 .env
 
+# Runtime data — local state should never pass through the repo.
+# Empty seed files are committed once; skip-worktree is set on them so
+# local modifications (players, teams, config, etc.) are ignored by git.
+# See: git update-index --skip-worktree data/*.json
+data/config.json
+data/players.json
+data/teams.json
+data/availability.json
+data/scrims.json
+data/sessions.json
+
 # OS
 .DS_Store
 Thumbs.db

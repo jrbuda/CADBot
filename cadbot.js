@@ -75,7 +75,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ── Ready ─────────────────────────────────────────────────────────────────────
-client.on('ready', async () => {
+client.on('clientReady', async () => {
     logger.info('Logged in as ' + client.user.tag);
 
     // Register slash commands with Discord
