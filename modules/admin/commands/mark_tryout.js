@@ -30,7 +30,7 @@ module.exports = {
         const players = data.getPlayers();
         if (!players[target.id]) {
             await message.channel.send({
-                content: `<@${target.id}> does not have a linked account. They must use \`/link\` first.`,
+                content: `<@${target.id}> hasn't linked their Riot account yet — they need to use \`/link\` first.`,
             });
             return;
         }

@@ -46,7 +46,7 @@ RIOT_REGIONAL_ROUTING=americas   # americas | europe | asia | sea
 
 1. **Bot → Privileged Gateway Intents:** enable **Server Members Intent**.
 2. **Invite the bot** with the `applications.commands` scope and a `bot` scope including:
-   - Manage Roles (create/assign team, captain, tryout roles)
+   - Manage Roles (create/assign team, captain, tryout, and position roles)
    - Manage Events (create scrim scheduled events)
    - Send Messages, Embed Links, Read Message History
 3. Make sure the bot's role is **above** any roles it needs to assign.
@@ -61,24 +61,33 @@ On first boot the bot registers all slash commands to your `GUILD_ID` and logs i
 
 ## First-run configuration (in Discord)
 
-Run these once, as the owner or an admin:
+Run these as the bot owner. **Two commands** to get the entire league set up:
 
+**Step 1 — Server config:**
 ```
-/set_role type:admin   role:@Admins
-/set_role type:captain role:@Captains
-/set_role type:tryout  role:@Tryouts
-/set_channel type:scrim channel:#scrims
-/set_channel type:log   channel:#staff-log
+/setup server admin_role:@Admins captain_role:@Captains tryout_role:@Tryouts scrim_channel:#scrims log_channel:#staff-log
 ```
 
-Then build out teams:
-
+**Step 2 — Create teams (repeat for each team):**
 ```
-/create_team name:"Team Alpha" [role:@TeamAlpha]
-/assign_player player:@User team:Team Alpha position:Mid type:Main [captain:true]
+/setup team name:"Team Alpha" short_name:"ALS" captain:@Player1
+         top:@Player1 jungle:@Player2 mid:@Player3 bot:@Player4 support:@Player5
+         sub1:@Player6 sub2:@Player7
 ```
 
-Players onboard themselves:
+That's it. The bot auto-creates all Discord roles and assigns players with the correct permissions.
+
+### What gets auto-created per team
+
+| Role | Who gets it |
+|------|-------------|
+| `{Team} Captain` (gold) | The captain |
+| `{Team}` | All 5 starters |
+| `{Team} Sub` (gray) | All substitutes |
+
+Plus **server-wide position roles** (`@Top`, `@Jungle`, `@Mid`, `@Bot`, `@Support`) — auto-created on first use for pinging entire roles across teams.
+
+### Players onboard themselves
 
 ```
 /link            # connect Riot account
@@ -134,24 +143,63 @@ sudo systemctl restart cadbot
 
 ## Command reference
 
-**Core**
-- `/ping`, `/help`, `/reload` (owner)
+### Core
+| Command | Tier | Description |
+|---------|------|-------------|
+| `/ping` | Everyone | Health check |
+| `/help` | Everyone | Paginated command browser by permission tier |
+| `/reload` | Owner | Hot-reload all commands, libraries, events, and slash definitions |
+| `/setup server` | Owner | Configure admin/captain/tryout roles, scrim/log channels in one command |
+| `/setup team` | Admin | Create a team with full roster (5 starters + 2 subs + captain) in one command |
 
-**Admin** (admin tier)
-- `/create_team`, `/delete_team`, `/assign_player` (with optional `captain` flag), `/unassign_player`
-- `/mark_tryout`, `/set_role`, `/set_channel`, `/team_channel`
+### Admin
+| Command | Tier | Description |
+|---------|------|-------------|
+| `/create_team` | Admin | Create a team (auto-creates Captain, Main, and Sub Discord roles) |
+| `/delete_team` | Admin | Delete a team and unassign all players |
+| `/assign_player` | Admin | Assign a player to a team with position, type, and optional captain promotion |
+| `/unassign_player` | Admin | Remove a player from their team |
+| `/mark_tryout` | Admin | Mark/unmark a player as a tryout |
+| `/set_role` | Admin | Link a Discord role to an admin, captain, or tryout tier |
+| `/set_channel` | Admin | Set the scrim, log, or tryout announcements channel |
+| `/team_channel` | Captain | Set the game session channel for your team |
 
-**League**
-- `/link`, `/unlink`, `/availability`, `/profile`, `/roster`, `/opgg`
-- `/scrim` (captain), `/record` (captain, fallback), `/game` (create/list/view/close sessions)
+### League
+| Command | Tier | Description |
+|---------|------|-------------|
+| `/link` | Everyone | Link your Riot ID (GameName#TAG) to your Discord |
+| `/unlink` | Everyone | Unlink your Riot account |
+| `/availability` | Everyone | View/set weekly schedule and date overrides; compare with another player or team |
+| `/profile` | Everyone | View a player's linked account, team info, and ranked stats |
+| `/roster` | Everyone | View a team's roster or list all teams |
+| `/opgg` | Everyone | Generate op.gg profile or multi-search links |
+| `/scrim internal` | Captain | Challenge another team via availability matching or manual date/time |
+| `/scrim external` | Captain | Schedule a scrim against an external team |
+| `/record` | Captain | Manually submit a scrim result (fallback for the auto-posted result embed) |
+| `/game create` | Captain | Create a tryout, custom game, or practice session |
+| `/game list` | Everyone | List all active sessions |
+| `/game view` | Everyone | View who signed up for a session |
+| `/game close` | Captain | Close a session you created |
+
+### Scrim options
+
+`/scrim internal` and `/scrim external` accept these optional parameters:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `date` | String | — | Specific date (YYYY-MM-DD), skips availability matching |
+| `time` | String | — | Start time (e.g. `7pm`, `19:00`), requires `date` |
+| `include_subs` | Boolean | false | Count substitutes toward the 5-player minimum |
+| `allow_fill` | Boolean | false | Let non-team members click to show fill interest |
+| `expires_in` | Integer | 24 | Hours until the slot selection or proposal expires (1–72) |
 
 ---
 
 ## Data & backups
 
 All state lives in `data/*.json` (`config`, `players`, `teams`, `availability`,
-`scrims`, `sessions`). Back up the `data/` folder to preserve everything. `logs/` and
-`.env` are git-ignored.
+`scrims`, `sessions`, `captain_prefs`). Back up the `data/` folder to preserve everything.
+`logs/` and `.env` are git-ignored.
 
 ## Security
 

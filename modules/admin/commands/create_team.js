@@ -14,28 +14,40 @@ module.exports = {
             required: true,
         },
         {
+            name: 'short_name',
+            description: 'Abbreviation \u2014 up to 3 characters (e.g. "ALS")',
+            type: 'STRING',
+            required: false,
+            max_length: 3,
+        },
+        {
             name: 'role',
-            description: 'Discord role to associate with this team (optional)',
+            description: 'Discord role to use as the main team role (optional \u2014 auto-creates otherwise)',
             type: 'ROLE',
             required: false,
         },
     ],
 
     async execute(message, args, extra) {
-        const data      = extra.data;
+        const data        = extra.data;
         const interaction = extra.interaction;
 
-        const teamName = interaction.options.getString('name').trim();
-        const role     = interaction.options.getRole('role');
+        const teamName  = interaction.options.getString('name').trim();
+        const shortName = (interaction.options.getString('short_name') || '').trim().toUpperCase();
+        const role      = interaction.options.getRole('role');
 
         if (!teamName) {
             await message.channel.send({ content: 'Team name cannot be empty.' });
             return;
         }
 
+        if (shortName.length > 3) {
+            await message.channel.send({ content: 'Short name must be at most 3 characters.' });
+            return;
+        }
+
         const teams = data.getTeams();
 
-        // Check for duplicate name
         const duplicate = Object.values(teams).find(
             t => t.name.toLowerCase() === teamName.toLowerCase()
         );
@@ -45,9 +57,10 @@ module.exports = {
         }
 
         const team_id = randomUUID();
-        let   discord_role_id = role ? role.id : '';
+        let discord_role_id           = role ? role.id : '';
+        let captain_discord_role_id   = '';
+        let sub_discord_role_id       = '';
 
-        // If no role was specified, create one for the team
         if (!role) {
             try {
                 const newRole = await message.guild.roles.create({
@@ -57,11 +70,34 @@ module.exports = {
                 });
                 discord_role_id = newRole.id;
             } catch (err) {
-                this.logger.warn(`[create_team] Could not create Discord role for "${teamName}": ${err.message}`);
+                this.logger.warn(`[create_team] Could not create main team role for "${teamName}": ${err.message}`);
             }
         }
 
-        // Create a captain role if one doesn't exist yet
+        try {
+            const capRole = await message.guild.roles.create({
+                name: `${teamName} Captain`,
+                color: 0xF1C40F,
+                mentionable: true,
+                reason: `Captain role for ${teamName}`,
+            });
+            captain_discord_role_id = capRole.id;
+        } catch (err) {
+            this.logger.warn(`[create_team] Could not create captain role for "${teamName}": ${err.message}`);
+        }
+
+        try {
+            const subRole = await message.guild.roles.create({
+                name: `${teamName} Sub`,
+                color: 0x95A5A6,
+                mentionable: true,
+                reason: `Substitute role for ${teamName}`,
+            });
+            sub_discord_role_id = subRole.id;
+        } catch (err) {
+            this.logger.warn(`[create_team] Could not create sub role for "${teamName}": ${err.message}`);
+        }
+
         const config = data.getConfig();
         if (!config.captain_role_id) {
             try {
@@ -69,36 +105,43 @@ module.exports = {
                     name: 'Captain',
                     color: 0xF1C40F,
                     mentionable: true,
-                    reason: 'Auto-created captain role for CADBot',
+                    reason: 'Auto-created server-wide captain role for CADBot',
                 });
                 config.captain_role_id = capRole.id;
                 data.saveConfig(config);
             } catch (err) {
-                this.logger.warn('[create_team] Could not auto-create captain role: ' + err.message);
+                this.logger.warn('[create_team] Could not auto-create server-wide captain role: ' + err.message);
             }
         }
 
         teams[team_id] = {
-            id:              team_id,
-            name:            teamName,
+            id:                      team_id,
+            name:                    teamName,
+            short_name:              shortName,
             discord_role_id,
-            captain_id:      '',
-            created_at:      new Date().toISOString(),
+            captain_discord_role_id,
+            sub_discord_role_id,
+            captain_id:              '',
+            created_at:              new Date().toISOString(),
         };
 
         data.saveTeams(teams);
 
+        const title = shortName
+            ? `Team Created \u2014 ${teamName} [${shortName}]`
+            : `Team Created \u2014 ${teamName}`;
+
         const embed = new EmbedBuilder()
-            .setTitle('Team Created')
+            .setTitle(title)
             .setColor(0x57F287)
             .addFields(
-                { name: 'Name',       value: teamName,              inline: true },
-                { name: 'Team ID',    value: `\`${team_id}\``,      inline: true },
-                { name: 'Role',       value: discord_role_id ? `<@&${discord_role_id}>` : 'None', inline: true },
+                { name: 'Main Role',   value: discord_role_id           ? `<@&${discord_role_id}>`           : 'None', inline: true },
+                { name: 'Captain Role', value: captain_discord_role_id  ? `<@&${captain_discord_role_id}>`   : 'None', inline: true },
+                { name: 'Sub Role',     value: sub_discord_role_id      ? `<@&${sub_discord_role_id}>`       : 'None', inline: true },
             )
             .setTimestamp();
 
         await message.channel.send({ embeds: [embed] });
-        this.logger.info(`[create_team] ${message.author.id} created team "${teamName}" (${team_id})`);
+        this.logger.info(`[create_team] ${message.author.id} created team "${teamName}" (${team_id}) short=${shortName || 'none'}`);
     },
 };

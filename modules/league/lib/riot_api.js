@@ -49,9 +49,19 @@ async function getSummonerByPuuid(puuid, logger) {
 /**
  * Fetches ranked stats for a summoner by summoner ID.
  * Endpoint: GET /lol/league/v4/entries/by-summoner/{encryptedSummonerId}
+ * @deprecated Riot has deprecated this endpoint (returns 403). Use getRankedStatsByPuuid instead.
  */
 async function getRankedStats(summoner_id, logger) {
     const url = `${PLATFORM_BASE}/lol/league/v4/entries/by-summoner/${encodeURIComponent(summoner_id)}`;
+    return riotGet(url, logger);
+}
+
+/**
+ * Fetches ranked stats for a summoner by PUUID.
+ * Endpoint: GET /lol/league/v4/entries/by-puuid/{encryptedPUUID}
+ */
+async function getRankedStatsByPuuid(puuid, logger) {
+    const url = `${PLATFORM_BASE}/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`;
     return riotGet(url, logger);
 }
 
@@ -63,10 +73,11 @@ async function getRankedStats(summoner_id, logger) {
  * @returns {Promise<{ account: Object, summoner: Object }>}
  */
 async function lookupRiotId(riotId, logger) {
-    const parts = riotId.split('#');
-    if (parts.length !== 2) throw new Error('Invalid Riot ID format. Expected "GameName#TAG".');
+    const lastHash = riotId.lastIndexOf('#');
+    if (lastHash === -1) throw new Error('Invalid Riot ID format. Expected "GameName#TAG".');
 
-    const [gameName, tagLine] = parts;
+    const gameName = riotId.substring(0, lastHash);
+    const tagLine  = riotId.substring(lastHash + 1);
     const account  = await getAccountByRiotId(gameName.trim(), tagLine.trim(), logger);
     const summoner = await getSummonerByPuuid(account.puuid, logger);
     return { account, summoner };
@@ -77,6 +88,7 @@ module.exports = {
     getAccountByRiotId,
     getSummonerByPuuid,
     getRankedStats,
+    getRankedStatsByPuuid,
     REGION,
     ROUTING,
 };

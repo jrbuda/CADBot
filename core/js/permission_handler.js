@@ -103,6 +103,17 @@ class PermissionHandler {
     isOwner(user_id) {
         return user_id === OWNER_ID;
     }
+
+    getTier(member, user_id) {
+        if (user_id === OWNER_ID) return 'OWNER';
+        const config = this.data.getConfig();
+        if (this._hasRole(member, config.admin_role_id)) return 'ADMIN';
+        if (this._hasRole(member, config.captain_role_id)) return 'CAPTAIN';
+        const player = this.data.getPlayer(user_id);
+        if (player && player.team_id) return 'MEMBER';
+        if (this._hasRole(member, config.tryout_role_id)) return 'TRYOUT';
+        return 'EVERYONE';
+    }
 }
 
 module.exports = PermissionHandler;

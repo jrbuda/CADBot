@@ -35,8 +35,9 @@ const modules     = new ModuleHandler(__dirname, data, permissions, logger);
 modules.discover_modules(__dirname + '/' + config.modules_folder);
 modules.discover_commands();
 
-const event_registry = new EventRegistry(client, logger);
-event_registry.discover_event_handlers(modules);
+modules.client = client;
+modules.event_registry = new EventRegistry(client, logger);
+modules.event_registry.discover_event_handlers(modules);
 
 logger.info('Event registration complete.');
 
@@ -79,7 +80,7 @@ client.on('clientReady', async () => {
     } catch (_) {}
 
     // Startup message
-    const startupChannelId = process.env.STARTUP_CHANNEL_ID || config.startup_channel_id;
+    const startupChannelId = process.env.STARTUP_CHANNEL_ID;
     if (startupChannelId) {
         try {
             const channel = await client.channels.fetch(startupChannelId);

@@ -1,4 +1,5 @@
 'use strict';
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 module.exports = {
     name: 'delete_team',
@@ -16,8 +17,6 @@ module.exports = {
 
     async autocomplete(interaction) {
         const DataManager = require('../../../core/js/data_manager.js');
-        // Access the shared data instance via the module_handler path isn't available in autocomplete,
-        // so we construct a temporary reader.
         const path = require('path');
         const data_path = path.join(__dirname, '../../../data');
         const data = new DataManager(data_path, { error: () => {}, info: () => {} });
@@ -44,37 +43,35 @@ module.exports = {
             return;
         }
 
-        const teamName = team.name;
-
-        // Unassign all players on this team
+        // Count affected players
         const players = data.getPlayers();
-        const config  = data.getConfig();
-        let unassigned = 0;
-        for (const [id, player] of Object.entries(players)) {
-            if (player.team_id === team_id) {
-                players[id].team_id    = '';
-                players[id].team_role  = '';
-                players[id].team_type  = '';
-                unassigned++;
-
-                if (config.captain_role_id && team.captain_id === id) {
-                    try {
-                        const member = await message.guild.members.fetch(id);
-                        await member.roles.remove(config.captain_role_id);
-                    } catch (_) {}
-                }
-            }
+        let playerCount = 0;
+        for (const p of Object.values(players)) {
+            if (p.team_id === team_id) playerCount++;
         }
-        data.savePlayers(players);
 
-        // Delete the team
-        const teams = data.getTeams();
-        delete teams[team_id];
-        data.saveTeams(teams);
+        const confirmRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`ADMIN_DELETE_TEAM_CONFIRM_${team_id}`)
+                .setLabel('Confirm Delete')
+                .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+                .setCustomId(`ADMIN_DELETE_TEAM_CANCEL_${team_id}`)
+                .setLabel('Cancel')
+                .setStyle(ButtonStyle.Secondary),
+        );
 
-        await message.channel.send({
-            content: `Team **${teamName}** has been deleted. ${unassigned} player(s) unassigned.`,
-        });
-        this.logger.info(`[delete_team] ${message.author.id} deleted team "${teamName}" (${team_id}), ${unassigned} players unassigned`);
+        const embed = new EmbedBuilder()
+            .setTitle('\u26A0\uFE0F Delete Team?')
+            .setDescription(
+                `Delete **${team.name}**?\n\n` +
+                `\u2022 ${playerCount} player(s) will be unassigned\n` +
+                `\u2022 The team role <@&${team.discord_role_id}> will be deleted\n` +
+                (team.captain_id ? `\u2022 Captain status will be cleared for <@${team.captain_id}>\n` : '') +
+                `\nThis is **permanent** and cannot be undone.`
+            )
+            .setColor(0xED4245);
+
+        await message.channel.send({ embeds: [embed], components: [confirmRow] });
     },
 };

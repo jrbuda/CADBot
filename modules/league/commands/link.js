@@ -1,15 +1,20 @@
 'use strict';
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 
 module.exports = {
     name: 'link',
     description: 'Link your League of Legends account (Riot ID) to your Discord profile.',
     permission: 'EVERYONE',
-    no_defer: true,   // We reply without deferring so we can use a modal
+    no_defer: true,
     options: [],
 
     async execute(message, args, extra) {
         const interaction = extra.interaction;
+
+        if (!process.env.RIOT_API_KEY) {
+            await interaction.reply({ content: 'The Riot API key is not configured. Contact the bot owner.', ephemeral: true });
+            return;
+        }
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -27,6 +32,6 @@ module.exports = {
             .setColor(0xC89B3C)
             .setFooter({ text: 'Your Riot ID is your in-game name and tag.' });
 
-        await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
+        await interaction.reply({ embeds: [embed], components: [row] });
     },
 };

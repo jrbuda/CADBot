@@ -1,6 +1,6 @@
 'use strict';
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
-const { formatWeeklySchedule, comparePlayerAvailability, formatDate } = require('../lib/availability_utils.js');
+const { formatWeeklySchedule, comparePlayerAvailability, formatDate, findTeamWindowsUTC } = require('../lib/availability_utils.js');
 
 module.exports = {
     name: 'availability',
@@ -22,15 +22,41 @@ module.exports = {
             required: false,
             autocomplete: true,
         },
+        {
+            name: 'team',
+            description: 'View your team\'s availability overlap for the next 7 days',
+            type: 'STRING',
+            required: false,
+            autocomplete: true,
+        },
     ],
 
-    async autocomplete(interaction) {
-        const path = require('path');
-        const DataManager = require('../../../core/js/data_manager.js');
-        const data = new DataManager(path.join(__dirname, '../../../data'), { error: () => {}, info: () => {} });
+    async autocomplete(interaction, extra) {
+        const data = extra.data;
 
         const focused = interaction.options.getFocused(true);
         const query   = focused.value.toLowerCase();
+
+        if (focused.name === 'team') {
+            // Return teams the user is on (or all teams for admin)
+            const teams = data.getTeams();
+            const players = data.getPlayers();
+            const myPlayer = players[interaction.user.id];
+            let choices = Object.values(teams);
+            if (myPlayer?.team_id) {
+                choices = choices.filter(t => t.id === myPlayer.team_id || t.captain_id === interaction.user.id);
+            } else {
+                const captainTeam = Object.values(teams).find(t => t.captain_id === interaction.user.id);
+                if (captainTeam) choices = [captainTeam];
+                else choices = Object.values(teams); // admin sees all
+            }
+            choices = choices
+                .filter(t => t.name.toLowerCase().includes(query))
+                .slice(0, 25)
+                .map(t => ({ name: t.name, value: t.id }));
+            await interaction.respond(choices);
+            return;
+        }
 
         // Only surface players who have actually set at least one day of availability
         const availability = data.getAvailability();
@@ -60,6 +86,68 @@ module.exports = {
 
         const target_id  = interaction.options.getString('player')  || null;
         const compare_id = interaction.options.getString('compare') || null;
+        const team_id    = interaction.options.getString('team')    || null;
+
+        // ── Team availability view ────────────────────────────────────────────
+        if (team_id) {
+            const team = data.getTeam(team_id);
+            if (!team) {
+                await interaction.reply({ content: 'Team not found.', flags: MessageFlags.Ephemeral });
+                return;
+            }
+
+            const members = data.getTeamPlayers(team_id).filter(p => p.riot_id);
+            if (members.length === 0) {
+                await interaction.reply({ content: `**${team.name}** has no linked players.`, flags: MessageFlags.Ephemeral });
+                return;
+            }
+
+            const memberIds = members.map(p => p.discord_id);
+            const availability = data.getAvailability();
+            const config = data.getConfig();
+            const timezone = config.timezone || 'America/New_York';
+
+            // Build 7-day overview
+            const dayLines = [];
+            for (let i = 0; i < 7; i++) {
+                const d = new Date();
+                d.setDate(d.getDate() + i);
+                const dateStr = d.toISOString().split('T')[0];
+
+                const win5 = findTeamWindowsUTC(memberIds, dateStr, availability, 5);
+                const win1 = findTeamWindowsUTC(memberIds, dateStr, availability, 1);
+
+                let indicator, detail;
+                if (win5.length > 0) {
+                    indicator = '\uD83D\uDFE2';
+                    detail = win5.map(w => `<t:${w.start_unix}:t>–<t:${w.end_unix}:t>`).join(', ');
+                } else if (win1.length > 0) {
+                    const win3 = findTeamWindowsUTC(memberIds, dateStr, availability, 3);
+                    if (win3.length > 0) {
+                        indicator = '\uD83D\uDFE1';
+                        detail = `${win1[0].player_count}/5 available` + (win3.length > 0 ? ` (${win3[0].player_count}+: ${win3.map(w => `<t:${w.start_unix}:t>–<t:${w.end_unix}:t>`).join(', ')})` : '');
+                    } else {
+                        indicator = '\uD83D\uDD34';
+                        detail = `${win1[0].player_count}/5 available`;
+                    }
+                } else {
+                    indicator = '\u26AB';
+                    detail = 'No data';
+                }
+
+                const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: timezone });
+                dayLines.push(`${indicator} **${dayLabel}** — ${detail}`);
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle(`${team.name} \u2014 Availability`)
+                .setDescription(dayLines.join('\n'))
+                .setColor(0x5865F2)
+                .setFooter({ text: `\uD83D\uDFE2 5+ available  \uD83D\uDFE1 3-4  \uD83D\uDD34 1-2  \u26AB No data  |  ${memberIds.length} players total` });
+
+            await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+            return;
+        }
 
         // ── Compare mode ─────────────────────────────────────────────────────
         if (compare_id) {
@@ -86,7 +174,7 @@ module.exports = {
             try {
                 const p2Player = data.getPlayer(compare_id);
                 if (p2Player?.riot_id) p2Name = p2Player.riot_id.split('#')[0];
-            } catch (_) {}
+            } catch (e) { this.logger.warn('[availability] Could not resolve display name for compare target ' + compare_id + ': ' + e.message); }
 
             let hasOverlap = false;
             const embed = new EmbedBuilder()
@@ -142,7 +230,10 @@ module.exports = {
             try {
                 const p = data.getPlayer(targetId);
                 displayName = p?.riot_id ? p.riot_id.split('#')[0] : `<@${targetId}>`;
-            } catch (_) { displayName = `<@${targetId}>`; }
+            } catch (e) {
+                this.logger.warn('[availability] Could not resolve display name for ' + targetId + ': ' + e.message);
+                displayName = `<@${targetId}>`;
+            }
         }
         const embedTitle = isSelf ? 'Your Availability' : `${displayName}'s Availability`;
 

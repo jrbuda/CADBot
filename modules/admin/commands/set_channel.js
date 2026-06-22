@@ -1,11 +1,11 @@
 'use strict';
-const { ChannelType } = require('discord.js');
+const { ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
-const CHANNEL_TYPES = ['scrim', 'log'];
+const CHANNEL_TYPES = ['scrim', 'log', 'tryout_announcements'];
 
 module.exports = {
     name: 'set_channel',
-    description: 'Designate a channel for scrim requests or admin logs.',
+    description: 'Designate a channel for scrim requests, admin logs, or tryout announcements.',
     permission: 'ADMIN',
     ephemeral: true,
     options: [
@@ -14,7 +14,11 @@ module.exports = {
             description: 'Channel purpose',
             type: 'STRING',
             required: true,
-            choices: CHANNEL_TYPES.map(t => ({ name: t.charAt(0).toUpperCase() + t.slice(1), value: t })),
+            choices: [
+                { name: 'Scrim',               value: 'scrim' },
+                { name: 'Log',                 value: 'log' },
+                { name: 'Tryout Announcements', value: 'tryout_announcements' },
+            ],
         },
         {
             name: 'channel',
@@ -37,12 +41,22 @@ module.exports = {
         }
 
         const config = data.getConfig();
-        config[type + '_channel_id'] = channel.id;
+        const key = type === 'tryout_announcements' ? 'tryout_announcements_channel_id' : type + '_channel_id';
+        config[key] = channel.id;
         data.saveConfig(config);
 
+        const typeLabel = type === 'tryout_announcements' ? 'tryout announcements' : type;
+        const testRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`ADMIN_SET_CHANNEL_TEST_${channel.id}`)
+                .setLabel('Test')
+                .setStyle(ButtonStyle.Secondary),
+        );
+
         await message.channel.send({
-            content: `The **${type}** channel has been set to <#${channel.id}>.`,
+            content: `The **${typeLabel}** channel has been set to <#${channel.id}>.`,
+            components: [testRow],
         });
-        this.logger.info(`[set_channel] ${type}_channel_id set to ${channel.id}`);
+        this.logger.info(`[set_channel] ${key} set to ${channel.id}`);
     },
 };

@@ -16,6 +16,7 @@ const path = require('path');
  *   availability.json — player weekly schedules + date overrides
  *   scrims.json      — scrim records keyed by scrim UUID
  *   sessions.json    — tryout / custom game sessions keyed by session UUID
+ *   captain_prefs.json — per-captain defaults for game session creation
  */
 class DataManager {
     /**
@@ -88,6 +89,10 @@ class DataManager {
         delete this._cache[filename];
     }
 
+    invalidate_all() {
+        this._cache = {};
+    }
+
     // ── Named accessors ───────────────────────────────────────────────────────
 
     getConfig()       { return this.read('config'); }
@@ -96,6 +101,7 @@ class DataManager {
     getAvailability() { return this.read('availability'); }
     getScrims()       { return this.read('scrims'); }
     getSessions()     { return this.read('sessions'); }
+    getCaptainPrefs() { return this.read('captain_prefs'); }
 
     saveConfig(data)       { this.write('config', data); }
     savePlayers(data)      { this.write('players', data); }
@@ -103,6 +109,7 @@ class DataManager {
     saveAvailability(data) { this.write('availability', data); }
     saveScrims(data)       { this.write('scrims', data); }
     saveSessions(data)     { this.write('sessions', data); }
+    saveCaptainPrefs(data) { this.write('captain_prefs', data); }
 
     // ── Convenience helpers ───────────────────────────────────────────────────
 

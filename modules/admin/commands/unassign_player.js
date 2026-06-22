@@ -1,4 +1,5 @@
 'use strict';
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 module.exports = {
     name: 'unassign_player',
@@ -27,43 +28,29 @@ module.exports = {
 
         const team     = data.getTeam(player.team_id);
         const teamName = team ? team.name : 'Unknown';
+        const isCaptain = team && team.captain_id === target.id;
 
-        const players = data.getPlayers();
-        players[target.id].team_id   = '';
-        players[target.id].team_role = '';
-        players[target.id].team_type = '';
-        data.savePlayers(players);
+        const confirmRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`ADMIN_UNASSIGN_CONFIRM_${target.id}`)
+                .setLabel('Confirm')
+                .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+                .setCustomId(`ADMIN_UNASSIGN_CANCEL_${target.id}`)
+                .setLabel('Cancel')
+                .setStyle(ButtonStyle.Secondary),
+        );
 
-        // Clear captain_id if this player was the captain
-        if (team && team.captain_id === target.id) {
-            const teams = data.getTeams();
-            teams[team.id].captain_id = '';
-            data.saveTeams(teams);
+        const embed = new EmbedBuilder()
+            .setTitle('\u26A0\uFE0F Unassign Player?')
+            .setDescription(
+                `Remove <@${target.id}> from **${teamName}**?\n` +
+                `Currently: **${player.team_role || '?'} ${player.team_type || '?'}**` +
+                (isCaptain ? ' · **Team Captain**' : '') +
+                `\nTheir team role${isCaptain ? ' and captain status' : ''} will be cleared.`
+            )
+            .setColor(0xFEE75C);
 
-            const config = data.getConfig();
-            if (config.captain_role_id) {
-                try {
-                    const member = await message.guild.members.fetch(target.id);
-                    await member.roles.remove(config.captain_role_id);
-                } catch (err) {
-                    this.logger.warn(`[unassign_player] Could not remove captain role: ${err.message}`);
-                }
-            }
-        }
-
-        // Remove the team Discord role if configured
-        if (team && team.discord_role_id) {
-            try {
-                const member = await message.guild.members.fetch(target.id);
-                await member.roles.remove(team.discord_role_id);
-            } catch (err) {
-                this.logger.warn(`[unassign_player] Could not remove team role from ${target.id}: ${err.message}`);
-            }
-        }
-
-        await message.channel.send({
-            content: `<@${target.id}> has been removed from **${teamName}**.`,
-        });
-        this.logger.info(`[unassign_player] ${target.id} unassigned from team "${teamName}"`);
+        await message.channel.send({ embeds: [embed], components: [confirmRow] });
     },
 };

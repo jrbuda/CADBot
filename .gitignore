@@ -17,6 +17,7 @@ data/*
 !data/availability.json
 !data/scrims.json
 !data/sessions.json
+!data/captain_prefs.json
 
 # OS
 .DS_Store

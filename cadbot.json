@@ -2,7 +2,6 @@
     "modules_folder": "modules",
     "log_folder": "logs",
     "data_folder": "data",
-    "startup_channel_id": "",
     "startup_messages": {
         "start": "CADBot is online!",
         "update": "CADBot has been updated and restarted!"

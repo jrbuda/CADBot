@@ -86,16 +86,33 @@ class ModuleHandler {
      * Clears the require cache for all command files and re-runs discover_commands.
      * Used by the /reload command.
      */
-    reload_commands() {
+    reload_all(client) {
         for (const [, mod] of this.modules) {
-            const dir   = mod.location + mod.config.commands_directory + '/';
-            const files = fs.readdirSync(dir).filter(f => f.endsWith('.js'));
+            const cmdDir = mod.location + mod.config.commands_directory + '/';
+            const libDir = mod.location + 'lib/';
+            const files = fs.readdirSync(cmdDir).filter(f => f.endsWith('.js'));
             for (const file of files) {
-                delete require.cache[require.resolve(dir + file)];
+                delete require.cache[require.resolve(cmdDir + file)];
+            }
+            if (fs.existsSync(libDir)) {
+                const libFiles = fs.readdirSync(libDir).filter(f => f.endsWith('.js'));
+                for (const file of libFiles) {
+                    delete require.cache[require.resolve(libDir + file)];
+                }
+            }
+            if (mod.config.event_handler) {
+                delete require.cache[require.resolve(mod.location + mod.config.event_handler)];
             }
         }
         this.discover_commands();
-        this.logger.info('[Modules] Commands reloaded.');
+        this.data.invalidate_all();
+        if (this.event_registry) {
+            this.event_registry.discover_event_handlers(this);
+        }
+        if (client) {
+            this.register_slash_commands(client).catch(err => this.logger.error('[Reload] Slash re-registration failed: ' + err.message));
+        }
+        this.logger.info('[Modules] Full reload complete (commands, libs, events, slash definitions).');
     }
 
     // ── Slash command registration ────────────────────────────────────────────
@@ -138,7 +155,22 @@ class ModuleHandler {
                 const desc    = (command.description || 'No description').substring(0, 100);
                 const builder = new SlashCommandBuilder().setName(slashName).setDescription(desc);
 
-                if (command.options?.length > 0) {
+                if (command.subcommands?.length > 0) {
+                    for (const sub of command.subcommands) {
+                        builder.addSubcommand(subBuilder => {
+                            const subDesc = (sub.description || 'No description').substring(0, 100);
+                            subBuilder.setName(sub.name).setDescription(subDesc);
+                            if (sub.options?.length > 0) {
+                                for (const opt of sub.options) {
+                                    try { this._add_slash_option(subBuilder, opt); } catch (e) {
+                                        this.logger.error('[Slash] Subcommand option error on ' + slashName + '/' + sub.name + ': ' + e.message);
+                                    }
+                                }
+                            }
+                            return subBuilder;
+                        });
+                    }
+                } else if (command.options?.length > 0) {
                     const sorted = command.options.slice().sort((a, b) => (b.required === true) - (a.required === true));
                     for (const opt of sorted) {
                         try { this._add_slash_option(builder, opt); } catch (e) {
@@ -238,7 +270,11 @@ class ModuleHandler {
         // Permission check
         const required = current_command.permission || 'EVERYONE';
         if (!this.permissions.check(required, interaction.member, interaction.user.id)) {
-            await interaction.reply({ content: 'You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+            const userTier = this.permissions.getTier(interaction.member, interaction.user.id);
+            await interaction.reply({
+                content: `\`/${slashName}\` requires **${required.charAt(0) + required.slice(1).toLowerCase()}** access. You have **${userTier.charAt(0) + userTier.slice(1).toLowerCase()}** access. Ask an admin if you need to be promoted.`,
+                flags: MessageFlags.Ephemeral,
+            });
             return;
         }
 
@@ -257,8 +293,16 @@ class ModuleHandler {
         let firstUser   = null;
         let firstMember = null;
 
-        if (current_command.options?.length > 0) {
-            for (const opt of current_command.options) {
+        // Resolve options from the command or the active subcommand
+        let cmdOptions = current_command.options || [];
+        if (current_command.subcommands?.length > 0) {
+            const subName = interaction.options.getSubcommand();
+            const sub = current_command.subcommands.find(s => s.name === subName);
+            cmdOptions = sub?.options || [];
+        }
+
+        if (cmdOptions.length > 0) {
+            for (const opt of cmdOptions) {
                 const optName = opt.name.toLowerCase().replace(/[^a-z0-9_-]/g, '_').substring(0, 32);
                 const type    = (opt.type || 'STRING').toUpperCase();
 
@@ -331,7 +375,9 @@ class ModuleHandler {
         for (const [, mod] of this.modules) {
             for (const [, cmd] of mod.commands) {
                 if (cmd._resolved_slash_name === slashName && typeof cmd.autocomplete === 'function') {
-                    try { await cmd.autocomplete(interaction); } catch (err) {
+                    try {
+                        await cmd.autocomplete(interaction, { data: this.data });
+                    } catch (err) {
                         this.logger.error('[Autocomplete] Error: ' + err.message);
                     }
                     return;

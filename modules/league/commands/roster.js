@@ -19,10 +19,8 @@ module.exports = {
         },
     ],
 
-    async autocomplete(interaction) {
-        const path = require('path');
-        const DataManager = require('../../../core/js/data_manager.js');
-        const data = new DataManager(path.join(__dirname, '../../../data'), { error: () => {}, info: () => {} });
+    async autocomplete(interaction, extra) {
+        const data = extra.data;
 
         const focused = interaction.options.getFocused().toLowerCase();
         const teams   = data.getTeams();
@@ -125,6 +123,18 @@ module.exports = {
         if (mainLines.length > 0) embed.addFields({ name: `Starters (${mainLines.length})`, value: mainLines.join('\n') });
         if (subLines.length > 0) embed.addFields({ name: `Substitutes (${subLines.length})`, value: subLines.join('\n') });
         if (team.discord_role_id) embed.addFields({ name: 'Team Role', value: `<@&${team.discord_role_id}>` });
+
+        // Add op.gg multi-search link for the team
+        const linkedMembers = members.filter(p => p.riot_id);
+        if (linkedMembers.length > 0) {
+            const region = (process.env.RIOT_REGION || 'na1').toLowerCase().replace(/\d+$/, '') || 'na';
+            const summoners = linkedMembers.map(p => {
+                const [gn, tl] = p.riot_id.split('#');
+                return encodeURIComponent((gn || '').trim() + '-' + (tl || region.toUpperCase()).trim());
+            }).join('%2C');
+            const opggUrl = `https://www.op.gg/multisearch/${region}?summoners=${summoners}`;
+            embed.addFields({ name: 'op.gg', value: `[View team on op.gg](${opggUrl})` });
+        }
 
         await message.channel.send({ embeds: [embed] });
     },

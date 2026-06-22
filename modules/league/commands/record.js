@@ -3,9 +3,8 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelect
 
 module.exports = {
     name: 'record',
-    description: 'Manually submit a scrim result (fallback for the auto-posted result embed).',
+    description: 'Manually submit a scrim result — pick a scrim, then click Win or Loss.',
     permission: 'CAPTAIN',
-    no_defer: false,
     ephemeral: true,
     options: [],
 
@@ -13,14 +12,12 @@ module.exports = {
         const data        = extra.data;
         const interaction = extra.interaction;
 
-        // Find the captain's team
         const my_team = data.getTeamByCaptain(message.author.id);
         if (!my_team) {
             await message.channel.send({ content: 'You are not set as a captain of any team.' });
             return;
         }
 
-        // Find scrims involving this team that are confirmed but not yet fully recorded
         const scrims   = data.getScrims();
         const pending  = Object.values(scrims).filter(s =>
             (s.team1_id === my_team.id || s.team2_id === my_team.id) &&
@@ -35,7 +32,6 @@ module.exports = {
             return;
         }
 
-        // Build select menu of pending scrims
         const teams = data.getTeams();
         const options = pending.slice(0, 25).map(s => {
             const opp_id   = s.team1_id === my_team.id ? s.team2_id : s.team1_id;
@@ -57,8 +53,7 @@ module.exports = {
         const embed = new EmbedBuilder()
             .setTitle('Record Scrim Result')
             .setDescription(
-                `Select a scrim to submit the result for. You are recording for **${my_team.name}**.\n\n` +
-                `The result will be logged immediately. The opposing captain will be notified and can dispute within 48 hours.`
+                `Select a scrim below. After selecting, use the **Win** or **Loss** buttons to record the result. No typing needed.`
             )
             .setColor(0x5865F2);
 

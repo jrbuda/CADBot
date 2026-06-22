@@ -22,10 +22,8 @@ module.exports = {
         },
     ],
 
-    async autocomplete(interaction) {
-        const path = require('path');
-        const DataManager = require('../../../core/js/data_manager.js');
-        const data = new DataManager(path.join(__dirname, '../../../data'), { error: () => {}, info: () => {} });
+    async autocomplete(interaction, extra) {
+        const data = extra.data;
 
         const focused = interaction.options.getFocused().toLowerCase();
         const teams   = data.getTeams();

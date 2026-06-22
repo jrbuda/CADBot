@@ -41,8 +41,18 @@ const CID = {
     SCRIM_EDIT:           'SCRIM_EDIT',        // prefix: SCRIM_EDIT_<scrim_id>
     SCRIM_EDIT_MODAL:     'SCRIM_EDIT_MODAL',  // prefix: SCRIM_EDIT_MODAL_<scrim_id>
     RECORD_SELECT:        'RECORD_SCRIM_SELECT',
-    RECORD_RESULT_MODAL:  'RECORD_RESULT_MODAL', // prefix: RECORD_RESULT_MODAL_<scrim_id>
+    RECORD_WIN:           'RECORD_WIN',           // prefix: RECORD_WIN_<scrim_id>
+    RECORD_LOSS:          'RECORD_LOSS',          // prefix: RECORD_LOSS_<scrim_id>
+    RECORD_EDIT:          'RECORD_EDIT',          // prefix: RECORD_EDIT_<scrim_id>
+    RECORD_NOTE:          'RECORD_NOTE',          // prefix: RECORD_NOTE_<scrim_id>
+    RECORD_EDIT_MODAL:    'RECORD_EDIT_MODAL',    // prefix: RECORD_EDIT_MODAL_<scrim_id>
+    RECORD_NOTE_MODAL:    'RECORD_NOTE_MODAL',    // prefix: RECORD_NOTE_MODAL_<scrim_id>
     GAME_INTEREST:      'GAME_INTEREST',   // prefix: GAME_INTEREST_<session_id>
+    GAME_SETTINGS:      'GAME_SETTINGS',   // prefix: GAME_SETTINGS_<session_id>
+    GAME_OPEN:          'GAME_OPEN',       // prefix: GAME_OPEN_<session_id>
+    GAME_SPOT_UP:       'GAME_SPOT_UP',    // prefix: GAME_SPOT_UP_<session_id>
+    GAME_SPOT_DOWN:     'GAME_SPOT_DOWN',  // prefix: GAME_SPOT_DOWN_<session_id>
+    GAME_CLOSE_BTN:     'GAME_CLOSE_BTN',  // prefix: GAME_CLOSE_BTN_<session_id>
     FILL_INTEREST:        'FILL_INTEREST',     // prefix: FILL_INTEREST_<scrim_id>
 };
 
@@ -156,7 +166,18 @@ function register_handlers(event_registry) {
                 const errMsg = { content: 'An error occurred. Please try again.', flags: MessageFlags.Ephemeral };
                 if (interaction.replied || interaction.deferred) await interaction.followUp(errMsg);
                 else await interaction.reply(errMsg);
-            } catch (_) {}
+            } catch (e) { logger.warn('[league/events] Error recovery failed: ' + e.message); }
+        }
+    });
+
+    // ── Auto-unlink on member leave ──────────────────────────────────────────
+    event_registry.register('guildMemberRemove', async (member) => {
+        const players = data.getPlayers();
+        if (players[member.id]) {
+            const riotId = players[member.id].riot_id || 'unknown';
+            delete players[member.id];
+            data.savePlayers(players);
+            logger.info(`[auto-unlink] ${member.id} (${riotId}) left server — account unlinked`);
         }
     });
 
@@ -194,6 +215,22 @@ async function handleButton(interaction) {
         return;
     }
 
+    // ─ /link admin button (with target user) → show modal ────────────────────
+    if (id.startsWith(CID.LINK_BUTTON + '_')) {
+        const targetId = id.replace(CID.LINK_BUTTON + '_', '');
+        const modal = makeModal(`${CID.LINK_MODAL}_${targetId}`, 'Link Riot Account', [
+            {
+                id:          'riot_id_input',
+                label:       'Riot ID',
+                placeholder: 'GameName#NA1',
+                style:       TextInputStyle.Short,
+                required:    true,
+            },
+        ]);
+        await interaction.showModal(modal);
+        return;
+    }
+
     // ─ Availability: Set weekdays ────────────────────────────────────────────
     if (id === CID.AVAIL_WEEKDAYS) {
         const { avail } = getOrCreateAvail(interaction.user.id);
@@ -205,7 +242,7 @@ async function handleButton(interaction) {
                 return {
                     id:          d,
                     label:       d.charAt(0).toUpperCase() + d.slice(1),
-                    placeholder: '7pm-10pm  or  19:00-22:00  (comma-separate multiple)',
+                    placeholder: 'e.g. 6pm-9pm, 10pm-11pm  |  split 8pm-12am, 12am-2am if past midnight',
                     style:       TextInputStyle.Short,
                     required:    false,
                     value:       existing,
@@ -227,7 +264,7 @@ async function handleButton(interaction) {
                 return {
                     id:          d,
                     label:       d.charAt(0).toUpperCase() + d.slice(1),
-                    placeholder: '1pm-8pm  or  13:00-20:00  (comma-separate multiple)',
+                    placeholder: 'e.g. 1pm-8pm, 9pm-11pm  |  split 8pm-12am, 12am-2am if past midnight',
                     style:       TextInputStyle.Short,
                     required:    false,
                     value:       existing,
@@ -244,14 +281,14 @@ async function handleButton(interaction) {
             {
                 id:          'override_date',
                 label:       'Date (YYYY-MM-DD)',
-                placeholder: '2025-07-04',
+                placeholder: 'e.g. 2025-07-04  — the specific date you want to override',
                 style:       TextInputStyle.Short,
                 required:    true,
             },
             {
                 id:          'override_times',
-                label:       "Times (or 'none' for unavailable)",
-                placeholder: '2pm-6pm, 8pm-11pm  — or  none',
+                label:       "Times (or type 'none' if unavailable)",
+                placeholder: 'e.g. 2pm-6pm, 8pm-11pm  |  split 8pm-12am, 12am-2am if past midnight  |  or: none',
                 style:       TextInputStyle.Short,
                 required:    true,
             },
@@ -328,6 +365,29 @@ async function handleButton(interaction) {
         return;
     }
 
+    // ─ Scrim: Fallback manual time (zero-slot fallback) ──────────────────────
+    if (id.startsWith('SCRIM_FALLBACK_MANUAL_')) {
+        const cacheId = id.replace('SCRIM_FALLBACK_MANUAL_', '');
+        const modal = makeModal(`SCRIM_MANUAL_MODAL_${cacheId}`, 'Enter Scrim Time', [
+            {
+                id:          'manual_date',
+                label:       'Date (YYYY-MM-DD)',
+                placeholder: 'e.g. 2026-06-25  — pick a date',
+                style:       TextInputStyle.Short,
+                required:    true,
+            },
+            {
+                id:          'manual_time',
+                label:       'Start time',
+                placeholder: 'e.g. 7pm, 7:30pm, or 19:00',
+                style:       TextInputStyle.Short,
+                required:    true,
+            },
+        ]);
+        await interaction.showModal(modal);
+        return;
+    }
+
     // ─ Scrim result: Dispute ─────────────────────────────────────────────────
     if (id.startsWith('SCRIM_DISPUTE_')) {
         await handleScrimDispute(interaction, id.replace('SCRIM_DISPUTE_', ''));
@@ -350,15 +410,93 @@ async function handleButton(interaction) {
         return;
     }
 
+    // ─ Record: Win ─────────────────────────────────────────────────────────────
+    if (id.startsWith(CID.RECORD_WIN + '_')) {
+        await handleRecordWin(interaction, id.replace(CID.RECORD_WIN + '_', ''));
+        return;
+    }
+
+    // ─ Record: Loss ────────────────────────────────────────────────────────────
+    if (id.startsWith(CID.RECORD_LOSS + '_')) {
+        await handleRecordLoss(interaction, id.replace(CID.RECORD_LOSS + '_', ''));
+        return;
+    }
+
+    // ─ Record: Edit players ────────────────────────────────────────────────────
+    if (id.startsWith(CID.RECORD_EDIT + '_')) {
+        await handleRecordEdit(interaction, id.replace(CID.RECORD_EDIT + '_', ''));
+        return;
+    }
+
+    // ─ Record: Add note ────────────────────────────────────────────────────────
+    if (id.startsWith(CID.RECORD_NOTE + '_')) {
+        await handleRecordNote(interaction, id.replace(CID.RECORD_NOTE + '_', ''));
+        return;
+    }
+
     // ─ Tryout: Express interest ──────────────────────────────────────────────
     if (id.startsWith('GAME_INTEREST_')) {
         await handleGameInterest(interaction, id.replace('GAME_INTEREST_', ''));
         return;
     }
 
+    // ─ Game: Settings (captain-only) ──────────────────────────────────────────
+    if (id.startsWith(CID.GAME_SETTINGS)) {
+        await handleGameSettings(interaction, id.replace(CID.GAME_SETTINGS + '_', ''));
+        return;
+    }
+
+    // ─ Game: Toggle open_to ───────────────────────────────────────────────────
+    if (id.startsWith(CID.GAME_OPEN)) {
+        await handleGameOpenToggle(interaction, id.replace(CID.GAME_OPEN + '_', ''));
+        return;
+    }
+
+    // ─ Game: Spot up ──────────────────────────────────────────────────────────
+    if (id.startsWith(CID.GAME_SPOT_UP)) {
+        await handleGameSpotUp(interaction, id.replace(CID.GAME_SPOT_UP + '_', ''));
+        return;
+    }
+
+    // ─ Game: Spot down ────────────────────────────────────────────────────────
+    if (id.startsWith(CID.GAME_SPOT_DOWN)) {
+        await handleGameSpotDown(interaction, id.replace(CID.GAME_SPOT_DOWN + '_', ''));
+        return;
+    }
+
+    // ─ Game: Close session button ─────────────────────────────────────────────
+    if (id.startsWith(CID.GAME_CLOSE_BTN)) {
+        await handleGameCloseBtn(interaction, id.replace(CID.GAME_CLOSE_BTN + '_', ''));
+        return;
+    }
+
     // ─ Fill interest ─────────────────────────────────────────────────────────
     if (id.startsWith('FILL_INTEREST_')) {
         await handleFillInterest(interaction, id.replace('FILL_INTEREST_', ''));
+        return;
+    }
+
+    // ─ External scrim: slot interest ──────────────────────────────────────────
+    if (id.startsWith('SCRIM_SLOT_INTEREST_')) {
+        await handleScrimSlotInterest(interaction, id.replace('SCRIM_SLOT_INTEREST_', ''));
+        return;
+    }
+
+    // ─ External scrim: add time slot ──────────────────────────────────────────
+    if (id.startsWith('SCRIM_ADD_SLOT_')) {
+        await handleScrimAddSlot(interaction, id.replace('SCRIM_ADD_SLOT_', ''));
+        return;
+    }
+
+    // ─ External scrim: confirm ────────────────────────────────────────────────
+    if (id.startsWith('SCRIM_CONFIRM_')) {
+        await handleScrimConfirm(interaction, id.replace('SCRIM_CONFIRM_', ''));
+        return;
+    }
+
+    // ─ External scrim: cancel ─────────────────────────────────────────────────
+    if (id.startsWith('SCRIM_CANCEL_PRO_')) {
+        await handleScrimCancelProposal(interaction, id.replace('SCRIM_CANCEL_PRO_', ''));
         return;
     }
 }
@@ -370,7 +508,14 @@ async function handleModal(interaction) {
 
     // ─ Link modal submitted ──────────────────────────────────────────────────
     if (id === CID.LINK_MODAL) {
-        await handleLinkModal(interaction);
+        await handleLinkModal(interaction, null);
+        return;
+    }
+
+    // ─ Link modal with target user (admin override) ───────────────────────────
+    if (id.startsWith(CID.LINK_MODAL + '_')) {
+        const targetId = id.replace(CID.LINK_MODAL + '_', '');
+        await handleLinkModal(interaction, targetId);
         return;
     }
 
@@ -392,15 +537,33 @@ async function handleModal(interaction) {
         return;
     }
 
-    // ─ Record result modal ───────────────────────────────────────────────────
-    if (id.startsWith('RECORD_RESULT_MODAL_')) {
-        await handleRecordResultModal(interaction, id.replace('RECORD_RESULT_MODAL_', ''));
+    // ─ Record edit-players modal ──────────────────────────────────────────────
+    if (id.startsWith(CID.RECORD_EDIT_MODAL + '_')) {
+        await handleRecordEditModal(interaction, id.replace(CID.RECORD_EDIT_MODAL + '_', ''));
+        return;
+    }
+
+    // ─ Record note modal ──────────────────────────────────────────────────────
+    if (id.startsWith(CID.RECORD_NOTE_MODAL + '_')) {
+        await handleRecordNoteModal(interaction, id.replace(CID.RECORD_NOTE_MODAL + '_', ''));
         return;
     }
 
     // ─ Scrim edit-players modal ──────────────────────────────────────────────
     if (id.startsWith('SCRIM_EDIT_MODAL_')) {
         await handleScrimEditModal(interaction, id.replace('SCRIM_EDIT_MODAL_', ''));
+        return;
+    }
+
+    // ─ Scrim manual time modal ────────────────────────────────────────────────
+    if (id.startsWith('SCRIM_MANUAL_MODAL_')) {
+        await handleScrimManualModal(interaction, id.replace('SCRIM_MANUAL_MODAL_', ''));
+        return;
+    }
+
+    // ─ Scrim add slot modal ───────────────────────────────────────────────────
+    if (id.startsWith('SCRIM_ADD_SLOT_MODAL_')) {
+        await handleScrimAddSlotModal(interaction, id.replace('SCRIM_ADD_SLOT_MODAL_', ''));
         return;
     }
 }
@@ -439,10 +602,11 @@ async function handleSelect(interaction) {
 
 // ── Implementation: Link ──────────────────────────────────────────────────────
 
-async function handleLinkModal(interaction) {
+async function handleLinkModal(interaction, targetUserId) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const riotIdRaw = interaction.fields.getTextInputValue('riot_id_input').trim();
+    const userId = targetUserId || interaction.user.id;
 
     if (!riotIdRaw.includes('#')) {
         await interaction.editReply({ content: 'Invalid Riot ID. Must include a tag, e.g. `PlayerName#NA1`.' });
@@ -453,17 +617,15 @@ async function handleLinkModal(interaction) {
         const { account, summoner } = await lookupRiotId(riotIdRaw, logger);
 
         const players = data.getPlayers();
-        players[interaction.user.id] = {
-            discord_id:  interaction.user.id,
+        players[userId] = {
+            discord_id:  userId,
             riot_id:     `${account.gameName}#${account.tagLine}`,
             puuid:       account.puuid,
-            summoner_id: summoner.id,
-            account_id:  summoner.accountId,
             summoner_level: summoner.summonerLevel,
-            team_id:     players[interaction.user.id]?.team_id   || '',
-            team_role:   players[interaction.user.id]?.team_role || '',
-            team_type:   players[interaction.user.id]?.team_type || '',
-            is_tryout:   players[interaction.user.id]?.is_tryout ?? false,
+            team_id:     players[userId]?.team_id   || '',
+            team_role:   players[userId]?.team_role || '',
+            team_type:   players[userId]?.team_type || '',
+            is_tryout:   players[userId]?.is_tryout ?? false,
             linked_at:   new Date().toISOString(),
         };
         data.savePlayers(players);
@@ -478,7 +640,7 @@ async function handleLinkModal(interaction) {
             .setFooter({ text: 'Use /profile to view your full profile.' });
 
         await interaction.editReply({ embeds: [embed] });
-        logger.info(`[link] ${interaction.user.id} linked account ${account.gameName}#${account.tagLine}`);
+        logger.info(`[link] ${userId} linked account ${account.gameName}#${account.tagLine}`);
     } catch (err) {
         logger.error('[link] Riot API error: ' + err.message);
         if (err.response?.status === 404) {
@@ -507,7 +669,8 @@ async function handleAvailWeekdaysModal(interaction) {
             } else {
                 avail.weekly[day] = windows;
             }
-        } catch (_) {
+        } catch (e) {
+            logger.warn('[availability] Could not read field for day ' + day + ': ' + e.message);
             avail.weekly[day] = [];
         }
     }
@@ -539,7 +702,8 @@ async function handleAvailWeekendModal(interaction) {
             } else {
                 avail.weekly[day] = windows;
             }
-        } catch (_) {
+        } catch (e) {
+            logger.warn('[availability] Could not read field for day ' + day + ': ' + e.message);
             avail.weekly[day] = [];
         }
     }
@@ -598,13 +762,12 @@ async function handleScrimSlotSelect(interaction) {
 
     const value    = interaction.values[0];
     const [cache_id, idx_str] = value.split(':');
-    const idx      = parseInt(idx_str, 10);
 
-    // Get the scrim command's pendingSlots cache
     let pendingSlots;
     try {
         pendingSlots = require('./commands/scrim.js').pendingSlots;
-    } catch (_) {
+    } catch (e) {
+        logger.warn('[scrim] Could not require pendingSlots: ' + e.message);
         await interaction.followUp({ content: 'Session expired. Please run `/scrim` again.', flags: MessageFlags.Ephemeral });
         return;
     }
@@ -615,16 +778,66 @@ async function handleScrimSlotSelect(interaction) {
         return;
     }
 
-    // Verify the person selecting is the one who ran the command
     if (interaction.user.id !== cached.requested_by) {
         await interaction.followUp({ content: 'Only the captain who requested this scrim can select a time.', flags: MessageFlags.Ephemeral });
         return;
     }
 
-    const slot     = cached.slots[idx];
-    const team1    = data.getTeam(cached.team1_id);
-    const team2    = data.getTeam(cached.team2_id);
-    const config   = data.getConfig();
+    // "Enter manually..." selected
+    if (idx_str === 'manual') {
+        const modal = makeModal(`SCRIM_MANUAL_MODAL_${cache_id}`, 'Enter Scrim Time', [
+            {
+                id:          'manual_date',
+                label:       'Date (YYYY-MM-DD)',
+                placeholder: 'e.g. 2026-06-25  — pick a date',
+                style:       TextInputStyle.Short,
+                required:    true,
+            },
+            {
+                id:          'manual_time',
+                label:       'Start time',
+                placeholder: 'e.g. 7pm, 7:30pm, or 19:00',
+                style:       TextInputStyle.Short,
+                required:    true,
+            },
+        ]);
+        await interaction.showModal(modal);
+        return;
+    }
+
+    const idx  = parseInt(idx_str, 10);
+    const slot = cached.slots[idx];
+
+    // External mode: propose to own team
+    if (cached.mode === 'external' || cached.mode === 'external_proposal') {
+        const team1 = data.getTeam(cached.team1_id);
+        if (!team1) {
+            await interaction.followUp({ content: 'Team not found.', flags: MessageFlags.Ephemeral });
+            return;
+        }
+
+        const slots = [slot];
+        pendingSlots.delete(cache_id);
+
+        // Create a new cache for the external proposal
+        const proposalCacheId = randomUUID().replace(/-/g, '').substring(0, 12);
+        pendingSlots.set(proposalCacheId, {
+            ...cached,
+            slots,
+            mode: 'external_proposal',
+        });
+        setTimeout(() => pendingSlots.delete(proposalCacheId), 24 * 60 * 60 * 1000);
+
+        await postExternalScrimEmbed(interaction, data, team1, slots, proposalCacheId,
+            cached.include_subs, cached.allow_fill, cached.requested_by);
+        await interaction.editReply({ content: '\u2705 Scrim proposal posted below. Your team can now vote.', components: [] });
+        return;
+    }
+
+    // Internal mode: existing behavior
+    const team1 = data.getTeam(cached.team1_id);
+    const team2 = data.getTeam(cached.team2_id);
+    const config = data.getConfig();
 
     if (!team1 || !team2) {
         await interaction.followUp({ content: 'One of the teams was not found.', flags: MessageFlags.Ephemeral });
@@ -636,11 +849,8 @@ async function handleScrimSlotSelect(interaction) {
         return;
     }
 
-    // Create a pending scrim record
     const scrim_id = randomUUID();
-    const timezone = cached.timezone || 'America/New_York';
-    const unix     = slot.start_unix;   // already UTC from the availability engine
-    const unix_end = slot.end_unix;
+    const unix     = slot.start_unix;
 
     const scrims = data.getScrims();
     scrims[scrim_id] = {
@@ -649,7 +859,6 @@ async function handleScrimSlotSelect(interaction) {
         team2_id:       cached.team2_id,
         status:         'pending',
         scheduled_time: new Date(unix * 1000).toISOString(),
-        scheduled_end:  new Date(unix_end * 1000).toISOString(),
         discord_event_id: '',
         requested_by:   cached.requested_by,
         include_subs:   cached.include_subs,
@@ -666,7 +875,6 @@ async function handleScrimSlotSelect(interaction) {
 
     pendingSlots.delete(cache_id);
 
-    // Post in scrim channel
     const scrimChannel = await interaction.guild.channels.fetch(config.scrim_channel_id).catch(() => null);
     if (!scrimChannel) {
         await interaction.followUp({ content: 'Scrim channel not found. Contact an admin.', flags: MessageFlags.Ephemeral });
@@ -674,35 +882,26 @@ async function handleScrimSlotSelect(interaction) {
     }
 
     const acceptRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`SCRIM_ACCEPT_${scrim_id}`)
-            .setLabel('Accept')
-            .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-            .setCustomId(`SCRIM_DECLINE_${scrim_id}`)
-            .setLabel('Decline')
-            .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`SCRIM_ACCEPT_${scrim_id}`).setLabel('Accept').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`SCRIM_DECLINE_${scrim_id}`).setLabel('Decline').setStyle(ButtonStyle.Danger),
     );
 
     const fillRow = cached.allow_fill ? new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`FILL_INTEREST_${scrim_id}`)
-            .setLabel("I'm available to fill")
-            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`FILL_INTEREST_${scrim_id}`).setLabel("I'm available to fill").setStyle(ButtonStyle.Secondary),
     ) : null;
 
     const captain2 = team2.captain_id ? `<@${team2.captain_id}>` : `_(no captain set for ${team2.name})_`;
 
     const embed = new EmbedBuilder()
-        .setTitle(`Scrim Request — ${team1.name} vs ${team2.name}`)
+        .setTitle(`Scrim Request \u2014 ${team1.name} vs ${team2.name}`)
         .setDescription(
             `**${team1.name}** has challenged **${team2.name}** to a scrim!\n\n` +
-            `📅 **Date:** <t:${unix}:D>\n` +
-            `⏰ **Time:** <t:${unix}:t> – <t:${unix_end}:t>\n` +
-            `👥 **${team1.name} players:** ${slot.t1_count} · **${team2.name} players:** ${slot.t2_count}\n\n` +
+            `\uD83D\uDCC5 **Date:** <t:${unix}:D>\n` +
+            `\u23F0 **Time:** <t:${unix}:t>\n` +
+            `\uD83D\uDC65 **${team1.name} players:** ${slot.t1_count} \u00b7 **${team2.name} players:** ${slot.t2_count}\n\n` +
             `${captain2}, please **Accept** or **Decline** this request.\n` +
-            (cached.include_subs ? '✅ Substitutes included\n' : '') +
-            (cached.allow_fill   ? '✅ Fill interest open — others can click below to show availability' : '')
+            (cached.include_subs ? '\u2705 Substitutes included\n' : '') +
+            (cached.allow_fill   ? '\u2705 Fill interest open' : '')
         )
         .setColor(0xFEE75C)
         .setFooter({ text: `Scrim ID: ${scrim_id}` })
@@ -711,8 +910,57 @@ async function handleScrimSlotSelect(interaction) {
     const components = fillRow ? [acceptRow, fillRow] : [acceptRow];
     await scrimChannel.send({ content: team2.captain_id ? `<@${team2.captain_id}>` : '', embeds: [embed], components });
 
-    await interaction.editReply({ content: `✅ Scrim request sent to **${team2.name}**! Check <#${config.scrim_channel_id}>.`, components: [] });
+    await interaction.editReply({ content: `\u2705 Scrim request sent to **${team2.name}**! Check <#${config.scrim_channel_id}>.`, components: [] });
     logger.info(`[scrim] Scrim ${scrim_id} created: ${team1.name} vs ${team2.name} at <t:${unix}>`);
+}
+
+// ── External scrim embed helper ────────────────────────────────────────────────
+
+async function postExternalScrimEmbed(interaction, data, team, slots, cache_id, include_subs, allow_fill, captainId) {
+    let slotDesc = '';
+    for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
+        const timeRange = s.end_unix ? ` \u2013 <t:${s.end_unix}:t>` : '';
+        slotDesc += `\u23F0 **Slot ${i + 1}:** <t:${s.start_unix}:D> <t:${s.start_unix}:t>${timeRange}\n\n`;
+    }
+
+    const rows = [];
+    for (let i = 0; i < slots.length; i++) {
+        rows.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`SCRIM_SLOT_INTEREST_${cache_id}_${i}`)
+                .setLabel(`Slot ${i + 1}: I Can Make It`)
+                .setStyle(ButtonStyle.Primary),
+        ));
+    }
+
+    const captainRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`SCRIM_ADD_SLOT_${cache_id}`)
+            .setLabel('+ Add Time Slot')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`SCRIM_CONFIRM_${cache_id}`)
+            .setLabel('\u2705 Confirm Time')
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId(`SCRIM_CANCEL_PRO_${cache_id}`)
+            .setLabel('\u274C Cancel')
+            .setStyle(ButtonStyle.Danger),
+    );
+
+    const embed = new EmbedBuilder()
+        .setTitle(`\uD83D\uDCCB External Scrim \u2014 ${team.name}`)
+        .setDescription(
+            `**${team.name}** is planning a scrim against an external team.\n\n` +
+            `Pick the slots you can make:\n${slotDesc}\n` +
+            (include_subs ? '\u2705 Substitutes included\n' : '') +
+            (allow_fill   ? '\u2705 Fill interest open' : '')
+        )
+        .setColor(0xFEE75C)
+        .setFooter({ text: `Cache: ${cache_id}` });
+
+    await interaction.followUp({ embeds: [embed], components: [...rows, captainRow] });
 }
 
 // ── Implementation: Scrim accept/decline ──────────────────────────────────────
@@ -742,15 +990,16 @@ async function handleScrimAccept(interaction, scrim_id) {
     const team1  = data.getTeam(scrim.team1_id);
     const config = data.getConfig();
     const unix   = Math.floor(new Date(scrim.scheduled_time).getTime() / 1000);
-    const unix_e = Math.floor(new Date(scrim.scheduled_end  ).getTime() / 1000);
 
-    // Create Discord scheduled event
+    // Create Discord scheduled event (end time = start + 3h, Discord requirement)
     let eventId = '';
     try {
+        const startDate = new Date(scrim.scheduled_time);
+        const endDate   = new Date(startDate.getTime() + 3 * 60 * 60 * 1000);
         const event = await interaction.guild.scheduledEvents.create({
             name:               `Scrim: ${team1?.name || '?'} vs ${team2?.name || '?'}`,
-            scheduledStartTime: new Date(scrim.scheduled_time),
-            scheduledEndTime:   new Date(scrim.scheduled_end),
+            scheduledStartTime: startDate,
+            scheduledEndTime:   endDate,
             privacyLevel:       GuildScheduledEventPrivacyLevel.GuildOnly,
             entityType:         GuildScheduledEventEntityType.External,
             entityMetadata:     { location: 'Custom Game Lobby' },
@@ -767,7 +1016,7 @@ async function handleScrimAccept(interaction, scrim_id) {
     const confirmedEmbed = new EmbedBuilder()
         .setTitle(`✅ Scrim Confirmed — ${team1?.name || '?'} vs ${team2?.name || '?'}`)
         .setDescription(
-            `📅 <t:${unix}:D> ⏰ <t:${unix}:t> – <t:${unix_e}:t>\n\n` +
+            `📅 <t:${unix}:D> ⏰ <t:${unix}:t>\n\n` +
             `Accepted by <@${interaction.user.id}>\n` +
             (eventId ? `A Discord event has been created for this scrim.\n` : '') +
             `When the scrim starts, a result tracker will be posted here and both captains pinged.`
@@ -785,14 +1034,18 @@ async function handleScrimAccept(interaction, scrim_id) {
             await requester.send({
                 content: `Your scrim request against **${team2?.name}** has been **accepted**! <t:${unix}:D> at <t:${unix}:t>.`,
             });
-        } catch (_) {}
+        } catch (e) {
+            logger.warn('[scrim] Could not send accept DM to requesting captain ' + scrim.requested_by + ': ' + e.message);
+        }
     } else if (team1?.captain_id) {
         try {
             const cap = await interaction.guild.members.fetch(team1.captain_id);
             await cap.send({
                 content: `Your scrim request against **${team2?.name}** has been **accepted**! <t:${unix}:D> at <t:${unix}:t>.`,
             });
-        } catch (_) {}
+        } catch (e) {
+            logger.warn('[scrim] Could not send accept DM to team1 captain ' + team1.captain_id + ': ' + e.message);
+        }
     }
 
     logger.info(`[scrim] Scrim ${scrim_id} accepted by ${interaction.user.id}`);
@@ -835,7 +1088,9 @@ async function handleScrimDecline(interaction, scrim_id) {
         try {
             const cap = await interaction.guild.members.fetch(notifyId);
             await cap.send({ content: `Your scrim request against **${team2?.name}** was **declined**.` });
-        } catch (_) {}
+        } catch (e) {
+            logger.warn('[scrim] Could not send decline DM to captain ' + notifyId + ': ' + e.message);
+        }
     }
 
     logger.info(`[scrim] Scrim ${scrim_id} declined by ${interaction.user.id}`);
@@ -857,98 +1112,99 @@ async function handleRecordScrimSelect(interaction) {
         return;
     }
 
-    // Get the members of the captain's team for the roster input hint
-    const teamPlayers = data.getTeamPlayers(my_team.id)
-        .filter(p => p.riot_id)
-        .map(p => `<@${p.discord_id}> (${p.riot_id})`)
-        .join(', ') || 'No linked players';
+    if (scrim.team1_id !== my_team.id && scrim.team2_id !== my_team.id) {
+        await interaction.reply({ content: 'You are not a captain of either team in this scrim.', flags: MessageFlags.Ephemeral });
+        return;
+    }
 
-    const modal = makeModal(
-        `RECORD_RESULT_MODAL_${scrim_id}`,
-        'Record Scrim Result',
-        [
-            {
-                id:          'outcome',
-                label:       'Result for your team',
-                placeholder: 'Win  or  Loss',
-                style:       TextInputStyle.Short,
-                required:    true,
-            },
-            {
-                id:          'roster',
-                label:       'Players who played (@mentions)',
-                placeholder: '@Player1 @Player2 @Player3 @Player4 @Player5',
-                style:       TextInputStyle.Paragraph,
-                required:    true,
-                value:       '',
-            },
-            {
-                id:          'notes',
-                label:       'Notes (optional)',
-                placeholder: 'Any notes about this scrim...',
-                style:       TextInputStyle.Paragraph,
-                required:    false,
-            },
-        ]
+    const team1 = data.getTeam(scrim.team1_id);
+    const team2 = data.getTeam(scrim.team2_id);
+
+    const t1Roster = scrim.players_team1?.length > 0
+        ? scrim.players_team1.map(id => `<@${id}>`).join('\n')
+        : '_TBD_';
+    const t2Roster = scrim.players_team2?.length > 0
+        ? scrim.players_team2.map(id => `<@${id}>`).join('\n')
+        : '_TBD_';
+
+    const embed = new EmbedBuilder()
+        .setTitle(`Record Result \u2014 ${team1?.name || '?'} vs ${team2?.name || '?'}`)
+        .addFields(
+            { name: team1?.name || 'Team 1', value: t1Roster, inline: true },
+            { name: team2?.name || 'Team 2', value: t2Roster, inline: true },
+        )
+        .setColor(0xFEE75C)
+        .setFooter({ text: `Scrim ID: ${scrim_id}` })
+        .setTimestamp();
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`${CID.RECORD_WIN}_${scrim_id}`)
+            .setLabel('We Won')
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId(`${CID.RECORD_LOSS}_${scrim_id}`)
+            .setLabel('We Lost')
+            .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+            .setCustomId(`${CID.RECORD_EDIT}_${scrim_id}`)
+            .setLabel('Edit Players')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`${CID.RECORD_NOTE}_${scrim_id}`)
+            .setLabel('Add Note')
+            .setStyle(ButtonStyle.Secondary),
     );
 
-    await interaction.showModal(modal);
+    await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
 }
 
-async function handleRecordResultModal(interaction, scrim_id) {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+async function handleRecordWin(interaction, scrim_id) {
+    await recordScrimResult(interaction, scrim_id, 'win');
+}
 
-    const outcome   = interaction.fields.getTextInputValue('outcome').trim().toLowerCase();
-    const rosterRaw = interaction.fields.getTextInputValue('roster').trim();
-    const notes     = interaction.fields.getTextInputValue('notes')?.trim() || '';
+async function handleRecordLoss(interaction, scrim_id) {
+    await recordScrimResult(interaction, scrim_id, 'loss');
+}
 
-    if (outcome !== 'win' && outcome !== 'loss') {
-        await interaction.editReply({ content: 'Outcome must be "Win" or "Loss".' });
-        return;
-    }
-
-    const scrim   = data.getScrim(scrim_id);
+async function recordScrimResult(interaction, scrim_id, outcome) {
+    const scrim = data.getScrim(scrim_id);
     if (!scrim) {
-        await interaction.editReply({ content: 'Scrim not found.' });
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
         return;
     }
-
     if (scrim.result) {
-        await interaction.editReply({ content: 'A result has already been recorded for this scrim. Use the Dispute button if it is incorrect.' });
+        await interaction.reply({ content: 'A result has already been recorded for this scrim.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     const my_team = data.getTeamByCaptain(interaction.user.id);
     if (!my_team || (scrim.team1_id !== my_team.id && scrim.team2_id !== my_team.id)) {
-        await interaction.editReply({ content: 'You are not a captain of either team in this scrim.' });
+        await interaction.reply({ content: 'You are not a captain of either team in this scrim.', flags: MessageFlags.Ephemeral });
         return;
     }
 
-    // Extract mentioned user IDs from roster input
-    const rosterIds = [...rosterRaw.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
+    await interaction.deferUpdate();
 
     const isTeam1   = scrim.team1_id === my_team.id;
     const winnerKey = outcome === 'win' ? my_team.id : (isTeam1 ? scrim.team2_id : scrim.team1_id);
     const opp_team  = data.getTeam(isTeam1 ? scrim.team2_id : scrim.team1_id);
 
-    const scrims    = data.getScrims();
+    const scrims = data.getScrims();
     scrims[scrim_id].result = {
         winner:            winnerKey,
         submitted_by:      interaction.user.id,
         submitted_at:      new Date().toISOString(),
         roster_submitter:  my_team.id,
-        players_team1:     isTeam1 ? rosterIds : (scrim.players_team1 || []),
-        players_team2:     isTeam1 ? (scrim.players_team2 || []) : rosterIds,
-        notes,
+        players_team1:     scrim.players_team1 || [],
+        players_team2:     scrim.players_team2 || [],
+        notes:             scrim._pending_note || '',
         disputed:          false,
         disputed_by:       null,
         disputed_at:       null,
     };
-
-    if (isTeam1) scrims[scrim_id].players_team1 = rosterIds;
-    else         scrims[scrim_id].players_team2 = rosterIds;
-
     scrims[scrim_id].status = 'completed';
+    delete scrims[scrim_id]._pending_note;
     data.saveScrims(scrims);
 
     const team1 = data.getTeam(scrim.team1_id);
@@ -956,40 +1212,39 @@ async function handleRecordResultModal(interaction, scrim_id) {
     const winnerTeam = data.getTeam(winnerKey);
 
     const embed = new EmbedBuilder()
-        .setTitle('Scrim Result Recorded')
+        .setTitle('\u2705 Result Recorded')
         .setColor(0x57F287)
         .addFields(
             { name: 'Matchup', value: `${team1?.name || '?'} vs ${team2?.name || '?'}`, inline: true },
             { name: 'Winner',  value: winnerTeam?.name || '?',                           inline: true },
         )
-        .setFooter({ text: `Submitted by ${interaction.user.username} · The opposing captain can dispute within 48 hours.` })
+        .setFooter({ text: `Submitted by ${interaction.user.username} \u00b7 Opposing captain can dispute within 48h.` })
         .setTimestamp();
 
-    if (notes) embed.addFields({ name: 'Notes', value: notes });
+    if (scrim.result.notes) embed.addFields({ name: 'Notes', value: scrim.result.notes });
 
-    await interaction.editReply({ embeds: [embed] });
+    const disputeRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`SCRIM_DISPUTE_${scrim_id}`)
+            .setLabel('Dispute This Result')
+            .setStyle(ButtonStyle.Danger),
+    );
 
-    // Notify opposing captain with a dispute option
+    await interaction.editReply({ embeds: [embed], components: [disputeRow] });
+
+    // Notify opposing captain
     const opp_captain_id = opp_team?.captain_id;
     if (opp_captain_id) {
-        const disputeRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`SCRIM_DISPUTE_${scrim_id}`)
-                .setLabel('Dispute This Result')
-                .setStyle(ButtonStyle.Danger),
-        );
-
         const notifEmbed = new EmbedBuilder()
             .setTitle('Scrim Result Submitted')
             .setDescription(
                 `The result for your scrim against **${my_team.name}** has been submitted.\n\n` +
-                `**Outcome:** ${my_team.name} — **${outcome.charAt(0).toUpperCase() + outcome.slice(1)}**\n\n` +
-                `If this is incorrect, click **Dispute** within 48 hours to flag it for admin review.`
+                `**Outcome:** ${my_team.name} \u2014 **${outcome.charAt(0).toUpperCase() + outcome.slice(1)}**\n\n` +
+                `If this is incorrect, click **Dispute** within 48 hours.`
             )
             .setColor(0xFEE75C)
             .setFooter({ text: `Scrim ID: ${scrim_id}` });
 
-        // Try to find the scrim channel or DM the captain
         const config = data.getConfig();
         const scrimChannel = config.scrim_channel_id
             ? await interaction.guild.channels.fetch(config.scrim_channel_id).catch(() => null)
@@ -997,15 +1252,108 @@ async function handleRecordResultModal(interaction, scrim_id) {
 
         if (scrimChannel) {
             await scrimChannel.send({ content: `<@${opp_captain_id}>`, embeds: [notifEmbed], components: [disputeRow] });
-        } else {
-            try {
-                const cap = await interaction.guild.members.fetch(opp_captain_id);
-                await cap.send({ embeds: [notifEmbed], components: [disputeRow] });
-            } catch (_) {}
         }
     }
 
-    logger.info(`[record] Scrim ${scrim_id} recorded: ${winnerKey} wins. By ${interaction.user.id}`);
+    logger.info(`[record] Scrim ${scrim_id} recorded: ${winnerKey} ${outcome}. By ${interaction.user.id}`);
+}
+
+async function handleRecordEdit(interaction, scrim_id) {
+    const scrim = data.getScrim(scrim_id);
+    if (!scrim) {
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const my_team = data.getTeamByCaptain(interaction.user.id);
+    if (!my_team || (scrim.team1_id !== my_team.id && scrim.team2_id !== my_team.id)) {
+        await interaction.reply({ content: 'You are not a captain for this scrim.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const isTeam1 = scrim.team1_id === my_team.id;
+    const current = (isTeam1 ? scrim.players_team1 : scrim.players_team2) || [];
+
+    const modal = makeModal(`${CID.RECORD_EDIT_MODAL}_${scrim_id}`, 'Edit Players', [
+        {
+            id:          'players',
+            label:       'Players who played (@mentions)',
+            placeholder: '@Player1 @Player2 @Player3 @Player4 @Player5',
+            style:       TextInputStyle.Paragraph,
+            required:    true,
+            value:       current.map(id => `<@${id}>`).join(' '),
+        },
+    ]);
+
+    await interaction.showModal(modal);
+}
+
+async function handleRecordEditModal(interaction, scrim_id) {
+    const scrim = data.getScrim(scrim_id);
+    if (!scrim) {
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const my_team = data.getTeamByCaptain(interaction.user.id);
+    if (!my_team) {
+        await interaction.reply({ content: 'Not a captain.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const raw = interaction.fields.getTextInputValue('players');
+    const ids = [...raw.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
+
+    const isTeam1 = scrim.team1_id === my_team.id;
+    const scrims = data.getScrims();
+    if (isTeam1) scrims[scrim_id].players_team1 = ids;
+    else         scrims[scrim_id].players_team2 = ids;
+    data.saveScrims(scrims);
+
+    await interaction.reply({ content: '\u2705 Players updated. Run `/record` again to submit the result.', flags: MessageFlags.Ephemeral });
+    logger.info(`[record] Players edited for scrim ${scrim_id} by ${interaction.user.id}`);
+}
+
+async function handleRecordNote(interaction, scrim_id) {
+    const scrim = data.getScrim(scrim_id);
+    if (!scrim) {
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const scrims = data.getScrims();
+    const currentNote = scrims[scrim_id]._pending_note || '';
+
+    const modal = makeModal(`${CID.RECORD_NOTE_MODAL}_${scrim_id}`, 'Add Note', [
+        {
+            id:          'note',
+            label:       'Notes about this scrim (optional)',
+            placeholder: 'Any notes...',
+            style:       TextInputStyle.Paragraph,
+            required:    false,
+            value:       currentNote,
+        },
+    ]);
+
+    await interaction.showModal(modal);
+}
+
+async function handleRecordNoteModal(interaction, scrim_id) {
+    const note = interaction.fields.getTextInputValue('note')?.trim() || '';
+
+    const scrims = data.getScrims();
+    if (!scrims[scrim_id]) {
+        await interaction.reply({ content: 'Scrim not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    scrims[scrim_id]._pending_note = note;
+    data.saveScrims(scrims);
+
+    await interaction.reply({
+        content: note ? `\u2705 Note added: "${note}"\nRun \`/record\` again to submit the result.` : '\u2705 Note cleared.',
+        flags: MessageFlags.Ephemeral,
+    });
 }
 
 async function handleScrimDispute(interaction, scrim_id) {
@@ -1061,7 +1409,7 @@ async function handleScrimDispute(interaction, scrim_id) {
         try {
             const logCh = await interaction.guild.channels.fetch(config.log_channel_id);
             await logCh.send({ content: `@here`, embeds: [disputeEmbed] });
-        } catch (_) {}
+        } catch (e) { logger.warn('[record] Could not send dispute notification to log channel: ' + e.message); }
     }
 
     logger.info(`[record] Scrim ${scrim_id} disputed by ${interaction.user.id}`);
@@ -1116,7 +1464,7 @@ async function handleFillInterest(interaction, scrim_id) {
         try {
             const cap = await interaction.guild.members.fetch(cap_id);
             await cap.send({ content: notif });
-        } catch (_) {}
+        } catch (e) { logger.warn('[scrim] Could not send fill interest DM to captain ' + cap_id + ': ' + e.message); }
     }
 }
 
@@ -1135,7 +1483,7 @@ async function handleGameInterest(interaction, session_id) {
 
     // Check open_to restriction
     const config = data.getConfig();
-    const open_to = session.open_to || 'tryout';
+    const open_to = session.open_to || 'member_tryout';
 
     if (open_to === 'tryout') {
         if (!perms.check('TRYOUT', interaction.member, uid)) {
@@ -1145,6 +1493,11 @@ async function handleGameInterest(interaction, session_id) {
     } else if (open_to === 'member') {
         if (!perms.check('MEMBER', interaction.member, uid)) {
             await interaction.reply({ content: 'This session is only open to team members.', flags: MessageFlags.Ephemeral });
+            return;
+        }
+    } else if (open_to === 'member_tryout') {
+        if (!perms.check('MEMBER', interaction.member, uid) && !perms.check('TRYOUT', interaction.member, uid)) {
+            await interaction.reply({ content: 'This session is only open to team members and tryouts.', flags: MessageFlags.Ephemeral });
             return;
         }
     }
@@ -1335,7 +1688,7 @@ async function handleScrimWinButton(interaction, scrim_id, teamNum) {
         try {
             const cap = await interaction.guild.members.fetch(oppCaptain);
             await cap.send({ content: `A result was recorded for your scrim **${team1?.name} vs ${team2?.name}**: **${winnerTeam?.name} Win**. If this is wrong, use the Dispute button in <#${data.getConfig().scrim_channel_id}>.` });
-        } catch (_) {}
+        } catch (e) { logger.warn('[scrim] Could not send result DM to opposing captain ' + oppCaptain + ': ' + e.message); }
     }
 
     logger.info(`[scrim] Result via button: scrim ${scrim_id}, winner ${winner_id}, by ${interaction.user.id}`);
@@ -1410,11 +1763,738 @@ async function handleScrimEditModal(interaction, rawId) {
     const payload = buildResultEmbed(scrim, team1, team2, !!scrim.result);
     try {
         await interaction.editReply(payload);
-    } catch (_) {
+    } catch (e) {
+        logger.warn('[scrim] Failed to refresh result embed for scrim ' + scrim_id + ': ' + e.message);
         await interaction.followUp({ content: 'Players updated.', flags: MessageFlags.Ephemeral });
     }
 
     logger.info(`[scrim] Players edited for scrim ${scrim_id} (team ${which}) by ${interaction.user.id}`);
+}
+
+// ── Implementation: Game settings buttons ─────────────────────────────────────
+
+const OPEN_TO_LABELS = {
+    member: 'Team members',
+    tryout: 'Tryouts',
+    member_tryout: 'Members + Tryouts',
+    everyone: 'Anyone',
+};
+const OPEN_TO_CYCLE = ['member_tryout', 'member', 'tryout', 'everyone'];
+
+function buildGameEmbed(session, team) {
+    const typeLabel = { tryout: 'Tryout', custom_game: 'Custom Game', practice: 'Practice' }[session.type] || session.type;
+    const openLabel = OPEN_TO_LABELS[session.open_to] || 'Anyone';
+
+    return new EmbedBuilder()
+        .setTitle(`${typeLabel} \u2014 ${session.name}`)
+        .setDescription(
+            `\uD83D\uDCC5 <t:${session.start_unix}:F>\n` +
+            `\uD83D\uDD50 <t:${session.start_unix}:R>\n` +
+            `\uD83C\uDFAE **Type:** ${typeLabel}\n` +
+            `\uD83D\uDC65 **Spots:** ${session.spots}\n` +
+            (team ? `\uD83D\uDEE1\uFE0F **Team:** ${team.name}\n` : '') +
+            `\uD83D\uDC4B **Open to:** ${openLabel}\n\n` +
+            `Click below if you're in!`
+        )
+        .setColor(session.status === 'closed' ? 0x95A5A6 : 0xED4245)
+        .setFooter({ text: `Session ID: ${session.id}` })
+        .setTimestamp();
+}
+
+async function handleGameSettings(interaction, session_id) {
+    const sessions = data.getSessions();
+    const session  = sessions[session_id];
+    if (!session || session.status === 'closed') {
+        await interaction.reply({ content: 'Session not available.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    // Only the captain of the team, the creator, or an admin can use settings
+    const isAdmin = perms.check('ADMIN', interaction.member, interaction.user.id);
+    const myTeam = data.getTeamByCaptain(interaction.user.id);
+    const canManage = isAdmin || session.created_by === interaction.user.id
+        || (myTeam && session.team_id === myTeam.id);
+    if (!canManage) {
+        await interaction.reply({ content: 'Only the session creator, team captain, or admin can change settings.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const openLabel = OPEN_TO_LABELS[session.open_to] || 'Anyone';
+    const settingsRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`${CID.GAME_OPEN}_${session_id}`)
+            .setLabel(`Open: ${openLabel}`)
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`${CID.GAME_SPOT_UP}_${session_id}`)
+            .setLabel('+1 Spot')
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId(`${CID.GAME_SPOT_DOWN}_${session_id}`)
+            .setLabel('-1 Spot')
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId(`${CID.GAME_CLOSE_BTN}_${session_id}`)
+            .setLabel('Close')
+            .setStyle(ButtonStyle.Danger),
+    );
+
+    await interaction.reply({
+        content: `Settings for **${session.name}** \u2014 Open to: ${openLabel}, ${session.spots} spots, ${session.interested.length} signed up.`,
+        components: [settingsRow],
+        flags: MessageFlags.Ephemeral,
+    });
+}
+
+async function handleGameOpenToggle(interaction, session_id) {
+    const sessions = data.getSessions();
+    const session  = sessions[session_id];
+    if (!session || session.status === 'closed') {
+        await interaction.reply({ content: 'Session not available.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const isAdmin = perms.check('ADMIN', interaction.member, interaction.user.id);
+    const myTeam = data.getTeamByCaptain(interaction.user.id);
+    const canManage = isAdmin || session.created_by === interaction.user.id
+        || (myTeam && session.team_id === myTeam.id);
+    if (!canManage) {
+        await interaction.reply({ content: 'Access denied.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const idx = OPEN_TO_CYCLE.indexOf(session.open_to);
+    const next = OPEN_TO_CYCLE[(idx + 1) % OPEN_TO_CYCLE.length];
+    sessions[session_id].open_to = next;
+    data.saveSessions(sessions);
+
+    // Update the public embed
+    try {
+        const ch = await interaction.guild.channels.fetch(session.channel_id);
+        const msg = await ch.messages.fetch(session.message_id);
+        const team = session.team_id ? data.getTeam(session.team_id) : null;
+        const embed = buildGameEmbed(sessions[session_id], team);
+        const interestRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`GAME_INTEREST_${session.id}`).setLabel("I'm In").setStyle(ButtonStyle.Success),
+        );
+        const settingsRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`${CID.GAME_SETTINGS}_${session.id}`).setLabel('\u2699\uFE0F Settings').setStyle(ButtonStyle.Secondary),
+        );
+        await msg.edit({ embeds: [embed], components: [interestRow, settingsRow] });
+    } catch (e) { logger.warn('[game] Failed to refresh embed for session ' + session_id + ' (open toggle): ' + e.message); }
+
+    const newLabel = OPEN_TO_LABELS[next] || next;
+    await interaction.update({
+        content: `\u2705 Open to changed: **${newLabel}**\nSettings for **${session.name}** \u2014 ${session.spots} spots, ${session.interested.length} signed up.`,
+        components: interaction.message.components,
+    });
+}
+
+async function handleGameSpotUp(interaction, session_id) {
+    const sessions = data.getSessions();
+    const session  = sessions[session_id];
+    if (!session || session.status === 'closed') {
+        await interaction.reply({ content: 'Session not available.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const isAdmin = perms.check('ADMIN', interaction.member, interaction.user.id);
+    const myTeam = data.getTeamByCaptain(interaction.user.id);
+    const canManage = isAdmin || session.created_by === interaction.user.id
+        || (myTeam && session.team_id === myTeam.id);
+    if (!canManage) {
+        await interaction.reply({ content: 'Access denied.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    if (session.spots >= 20) {
+        await interaction.reply({ content: 'Max 20 spots.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    sessions[session_id].spots++;
+    data.saveSessions(sessions);
+
+    // Update public embed
+    try {
+        const ch = await interaction.guild.channels.fetch(session.channel_id);
+        const msg = await ch.messages.fetch(session.message_id);
+        const team = session.team_id ? data.getTeam(session.team_id) : null;
+        const embed = buildGameEmbed(sessions[session_id], team);
+        const interestRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`GAME_INTEREST_${session.id}`).setLabel("I'm In").setStyle(ButtonStyle.Success),
+        );
+        const settingsRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`${CID.GAME_SETTINGS}_${session.id}`).setLabel('\u2699\uFE0F Settings').setStyle(ButtonStyle.Secondary),
+        );
+        await msg.edit({ embeds: [embed], components: [interestRow, settingsRow] });
+    } catch (e) { logger.warn('[game] Failed to refresh embed for session ' + session_id + ' (spot up): ' + e.message); }
+
+    await interaction.reply({
+        content: `\u2705 Spots increased to **${session.spots}**.`,
+        flags: MessageFlags.Ephemeral,
+    });
+}
+
+async function handleGameSpotDown(interaction, session_id) {
+    const sessions = data.getSessions();
+    const session  = sessions[session_id];
+    if (!session || session.status === 'closed') {
+        await interaction.reply({ content: 'Session not available.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const isAdmin = perms.check('ADMIN', interaction.member, interaction.user.id);
+    const myTeam = data.getTeamByCaptain(interaction.user.id);
+    const canManage = isAdmin || session.created_by === interaction.user.id
+        || (myTeam && session.team_id === myTeam.id);
+    if (!canManage) {
+        await interaction.reply({ content: 'Access denied.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const minSpots = Math.max(1, session.interested.length);
+    if (session.spots <= minSpots) {
+        await interaction.reply({ content: `Cannot reduce below **${minSpots}** (${session.interested.length} player(s) signed up).`, flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    sessions[session_id].spots--;
+    data.saveSessions(sessions);
+
+    // Update public embed
+    try {
+        const ch = await interaction.guild.channels.fetch(session.channel_id);
+        const msg = await ch.messages.fetch(session.message_id);
+        const team = session.team_id ? data.getTeam(session.team_id) : null;
+        const embed = buildGameEmbed(sessions[session_id], team);
+        const interestRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`GAME_INTEREST_${session.id}`).setLabel("I'm In").setStyle(ButtonStyle.Success),
+        );
+        const settingsRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`${CID.GAME_SETTINGS}_${session.id}`).setLabel('\u2699\uFE0F Settings').setStyle(ButtonStyle.Secondary),
+        );
+        await msg.edit({ embeds: [embed], components: [interestRow, settingsRow] });
+    } catch (e) { logger.warn('[game] Failed to refresh embed for session ' + session_id + ' (spot down): ' + e.message); }
+
+    await interaction.reply({
+        content: `\u2705 Spots reduced to **${session.spots}**.`,
+        flags: MessageFlags.Ephemeral,
+    });
+}
+
+async function handleGameCloseBtn(interaction, session_id) {
+    const sessions = data.getSessions();
+    const session  = sessions[session_id];
+    if (!session || session.status === 'closed') {
+        await interaction.reply({ content: 'Session already closed.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const isAdmin = perms.check('ADMIN', interaction.member, interaction.user.id);
+    const myTeam = data.getTeamByCaptain(interaction.user.id);
+    const canClose = isAdmin || session.created_by === interaction.user.id
+        || (myTeam && session.team_id === myTeam.id);
+    if (!canClose) {
+        await interaction.reply({ content: 'You can only close sessions you created or that belong to your team.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    sessions[session_id].status = 'closed';
+    data.saveSessions(sessions);
+
+    // Update public embed
+    try {
+        const ch = await interaction.guild.channels.fetch(session.channel_id);
+        const msg = await ch.messages.fetch(session.message_id);
+        const team = session.team_id ? data.getTeam(session.team_id) : null;
+        const embed = buildGameEmbed(sessions[session_id], team);
+        await msg.edit({ embeds: [embed], components: [] });
+    } catch (e) { logger.warn('[game] Failed to close embed for session ' + session_id + ': ' + e.message); }
+
+    await interaction.reply({ content: `\u2705 Session **${session.name}** closed.`, flags: MessageFlags.Ephemeral });
+    logger.info(`[game] Session ${session_id} closed via button by ${interaction.user.id}`);
+}
+
+// ── Implementation: External scrim buttons ───────────────────────────────────
+
+async function handleScrimSlotInterest(interaction, rawId) {
+    // rawId = cacheId_slotIdx
+    const parts = rawId.split('_');
+    const slotIdx = parseInt(parts.pop(), 10);
+    const cacheId = parts.join('_');
+
+    let pendingSlots;
+    try {
+        pendingSlots = require('./commands/scrim.js').pendingSlots;
+    } catch (e) {
+        logger.warn('[scrim] Could not require pendingSlots for slot interest: ' + e.message);
+        await interaction.reply({ content: 'Session expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const cached = pendingSlots.get(cacheId);
+    if (!cached || cached.mode !== 'external_proposal') {
+        await interaction.reply({ content: 'Proposal not found or expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const slot = cached.slots[slotIdx];
+    if (!slot) {
+        await interaction.reply({ content: 'Slot not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const uid = interaction.user.id;
+
+    // Toggle interest
+    if (!slot.interested) slot.interested = [];
+    if (slot.interested.includes(uid)) {
+        slot.interested = slot.interested.filter(id => id !== uid);
+        await interaction.reply({ content: `You have been removed from slot ${slotIdx + 1}.`, flags: MessageFlags.Ephemeral });
+    } else {
+        slot.interested.push(uid);
+        await interaction.reply({ content: `\u2705 You're marked as available for slot ${slotIdx + 1}!`, flags: MessageFlags.Ephemeral });
+    }
+
+    // Update the embed with new counts
+    try {
+        const team = data.getTeam(cached.team1_id);
+        const newEmbed = new EmbedBuilder()
+            .setTitle(`\uD83D\uDCCB External Scrim \u2014 ${team?.name || '?'}`)
+            .setColor(0xFEE75C)
+            .setFooter({ text: `Cache: ${cacheId}` });
+
+        let desc = `**${team?.name || '?'}** is planning a scrim against an external team.\n\nPick the slots you can make:\n\n`;
+        for (let i = 0; i < cached.slots.length; i++) {
+            const s = cached.slots[i];
+            const count = (s.interested || []).length;
+            desc += `\u23F0 **Slot ${i + 1}:** <t:${s.start_unix}:D> <t:${s.start_unix}:t> \u2013 <t:${s.end_unix}:t> \u2014 **${count}** available\n\n`;
+        }
+        if (cached.include_subs) desc += '\u2705 Substitutes included\n';
+        if (cached.allow_fill) desc += '\u2705 Fill interest open\n';
+
+        newEmbed.setDescription(desc);
+
+        if (interaction.message) {
+            await interaction.message.edit({ embeds: [newEmbed] });
+        }
+    } catch (e) { logger.warn('[scrim] Failed to update external scrim embed for cache ' + cacheId + ': ' + e.message); }
+}
+
+async function handleScrimAddSlot(interaction, cacheId) {
+    let pendingSlots;
+    try {
+        pendingSlots = require('./commands/scrim.js').pendingSlots;
+    } catch (e) {
+        logger.warn('[scrim] Could not require pendingSlots: ' + e.message);
+        await interaction.reply({ content: 'Session expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const cached = pendingSlots.get(cacheId);
+    if (!cached || cached.mode !== 'external_proposal') {
+        await interaction.reply({ content: 'Proposal not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    if (interaction.user.id !== cached.requested_by) {
+        await interaction.reply({ content: 'Only the captain can add time slots.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    if (cached.slots.length >= 5) {
+        await interaction.reply({ content: 'Max 5 time slots.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const modal = makeModal(`SCRIM_ADD_SLOT_MODAL_${cacheId}`, 'Add Time Slot', [
+        {
+            id:          'add_date',
+            label:       'Date (YYYY-MM-DD)',
+            placeholder: 'e.g. 2026-06-25  — date of the extra slot',
+            style:       TextInputStyle.Short,
+            required:    true,
+        },
+        {
+            id:          'add_time',
+            label:       'Start time',
+                placeholder: 'e.g. 7pm, 7:30pm, or 19:00',
+            style:       TextInputStyle.Short,
+            required:    true,
+        },
+    ]);
+
+    await interaction.showModal(modal);
+}
+
+async function handleScrimAddSlotModal(interaction, cacheId) {
+    const dateInput = interaction.fields.getTextInputValue('add_date').trim();
+    const timeInput = interaction.fields.getTextInputValue('add_time').trim();
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+        await interaction.reply({ content: 'Invalid date \u2014 use `YYYY-MM-DD`.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const timeMins = parseTime(timeInput);
+    if (timeMins === null) {
+        await interaction.reply({ content: `Invalid time \u2014 use \`7pm\`, \`7:30pm\`, or \`19:00\`.`, flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    let pendingSlots;
+    try {
+        pendingSlots = require('./commands/scrim.js').pendingSlots;
+    } catch (e) {
+        logger.warn('[scrim] Could not require pendingSlots for add slot: ' + e.message);
+        await interaction.reply({ content: 'Session expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const cached = pendingSlots.get(cacheId);
+    if (!cached) {
+        await interaction.reply({ content: 'Proposal expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const config = data.getConfig();
+    const timezone = cached.timezone || config.timezone || 'America/New_York';
+    const [y, mo, dy] = dateInput.split('-').map(Number);
+    const start_unix = toUnixTimestamp(y, mo - 1, dy, timeMins, timezone);
+    const end_unix = start_unix + 3600 * 3;
+
+    cached.slots.push({ start_unix, end_unix, player_count: 0, dateStr: dateInput, interested: [] });
+    pendingSlots.set(cacheId, cached);
+
+    // Rebuild the embed with new slot rows + captain row
+    const team = data.getTeam(cached.team1_id);
+    let desc = `**${team?.name || '?'}** is planning a scrim against an external team.\n\nPick the slots you can make:\n\n`;
+    for (let i = 0; i < cached.slots.length; i++) {
+        const s = cached.slots[i];
+        const count = (s.interested || []).length;
+        desc += `\u23F0 **Slot ${i + 1}:** <t:${s.start_unix}:D> <t:${s.start_unix}:t> \u2013 <t:${s.end_unix}:t> \u2014 **${count}** available\n\n`;
+    }
+    if (cached.include_subs) desc += '\u2705 Substitutes included\n';
+    if (cached.allow_fill) desc += '\u2705 Fill interest open\n';
+
+    const embed = new EmbedBuilder()
+        .setTitle(`\uD83D\uDCCB External Scrim \u2014 ${team?.name || '?'}`)
+        .setDescription(desc)
+        .setColor(0xFEE75C)
+        .setFooter({ text: `Cache: ${cacheId}` });
+
+    const rows = [];
+    for (let i = 0; i < Math.min(cached.slots.length, 5); i++) {
+        rows.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`SCRIM_SLOT_INTEREST_${cacheId}_${i}`)
+                .setLabel(`Slot ${i + 1}: I Can Make It`)
+                .setStyle(ButtonStyle.Primary),
+        ));
+    }
+
+    const captainRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`SCRIM_ADD_SLOT_${cacheId}`)
+            .setLabel('+ Add Time Slot')
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`SCRIM_CONFIRM_${cacheId}`)
+            .setLabel('\u2705 Confirm Time')
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId(`SCRIM_CANCEL_PRO_${cacheId}`)
+            .setLabel('\u274C Cancel')
+            .setStyle(ButtonStyle.Danger),
+    );
+
+    const comps = cached.slots.length >= 5 ? [...rows, captainRow].slice(0, 5) : [...rows, captainRow];
+
+    try {
+        await interaction.message.edit({ embeds: [embed], components: comps });
+        await interaction.reply({ content: `\u2705 Slot added for ${dateInput} at ${timeInput}.`, flags: MessageFlags.Ephemeral });
+    } catch (e) {
+        logger.warn('[scrim] Failed to update external scrim embed after slot add (cache ' + cacheId + '): ' + e.message);
+        await interaction.reply({ content: `\u2705 Slot added for ${dateInput} at ${timeInput}.`, flags: MessageFlags.Ephemeral });
+    }
+}
+
+async function handleScrimConfirm(interaction, cacheId) {
+    let pendingSlots;
+    try {
+        pendingSlots = require('./commands/scrim.js').pendingSlots;
+    } catch (e) {
+        logger.warn('[scrim] Could not require pendingSlots: ' + e.message);
+        await interaction.reply({ content: 'Session expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const cached = pendingSlots.get(cacheId);
+    if (!cached || cached.mode !== 'external_proposal') {
+        await interaction.reply({ content: 'Proposal not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    if (interaction.user.id !== cached.requested_by) {
+        await interaction.reply({ content: 'Only the captain can confirm.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    // Pick the slot with the most interested players
+    let bestSlot = null;
+    let bestCount = -1;
+    for (const slot of cached.slots) {
+        const count = (slot.interested || []).length;
+        if (count > bestCount) {
+            bestCount = count;
+            bestSlot = slot;
+        }
+    }
+
+    if (!bestSlot) {
+        await interaction.reply({ content: 'No slots available.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const team1 = data.getTeam(cached.team1_id);
+    const config = data.getConfig();
+
+    // Create scrim record
+    const scrim_id = randomUUID();
+    const scrims = data.getScrims();
+    scrims[scrim_id] = {
+        id:             scrim_id,
+        team1_id:       cached.team1_id,
+        team2_id:       '',
+        status:         'confirmed',
+        scheduled_time: new Date(bestSlot.start_unix * 1000).toISOString(),
+        discord_event_id: '',
+        requested_by:   cached.requested_by,
+        include_subs:   cached.include_subs,
+        allow_fill:     cached.allow_fill,
+        fill_interests: [],
+        result:         null,
+        result_embed_posted: false,
+        result_message_id:   '',
+        players_team1:  bestSlot.interested || [],
+        players_team2:  [],
+        created_at:     new Date().toISOString(),
+    };
+    data.saveScrims(scrims);
+
+    pendingSlots.delete(cacheId);
+
+    // Create Discord event (end time = start + 3h, Discord requirement)
+    let eventId = '';
+    try {
+        const startDt = new Date(bestSlot.start_unix * 1000);
+        const event = await interaction.guild.scheduledEvents.create({
+            name: `Scrim: ${team1?.name || '?'} (External)`,
+            scheduledStartTime: startDt,
+            scheduledEndTime: new Date(startDt.getTime() + 3 * 60 * 60 * 1000),
+            privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
+            entityType: GuildScheduledEventEntityType.External,
+            entityMetadata: { location: 'Custom Game Lobby' },
+            description: `${team1?.name || '?'} is scrimming an external team. Come spectate!`,
+        });
+        eventId = event.id;
+        scrims[scrim_id].discord_event_id = eventId;
+        data.saveScrims(scrims);
+    } catch (e) { logger.warn('[scrim] Could not create Discord event for external scrim ' + scrim_id + ': ' + e.message); }
+
+    // Post to scrim channel for visibility
+    if (config.scrim_channel_id) {
+        try {
+            const ch = await interaction.guild.channels.fetch(config.scrim_channel_id);
+            const unix = bestSlot.start_unix;
+            const confirmEmbed = new EmbedBuilder()
+                .setTitle(`\u2705 Scrim Scheduled \u2014 ${team1?.name || '?'}`)
+                .setDescription(
+                    `**${team1?.name || '?'}** is scrimming an external team.\n\n` +
+                    `\uD83D\uDCC5 <t:${unix}:D> \u23F0 <t:${unix}:t>\n` +
+                    `\uD83D\uDC65 ${bestCount} player(s) confirmed.\n` +
+                    (eventId ? `\nA Discord event has been created \u2014 come spectate!\n` : '')
+                )
+                .setColor(0x57F287);
+            await ch.send({ embeds: [confirmEmbed] });
+        } catch (e) { logger.warn('[scrim] Could not post external scrim announcement to scrim channel: ' + e.message); }
+    }
+
+    // Update original message
+    const confirmEmbed = new EmbedBuilder()
+        .setTitle(`\u2705 Scrim Confirmed \u2014 ${team1?.name || '?'}`)
+        .setDescription(
+            `External scrim scheduled!\n` +
+            `\uD83D\uDCC5 <t:${bestSlot.start_unix}:D> \u23F0 <t:${bestSlot.start_unix}:t>\n` +
+            `\uD83D\uDC65 ${bestCount} player(s) confirmed.\n` +
+            (eventId ? '\nDiscord event created! Come spectate.\n' : '')
+        )
+        .setColor(0x57F287);
+
+    try {
+        await interaction.message.edit({ embeds: [confirmEmbed], components: [] });
+    } catch (e) {
+        logger.warn('[scrim] Could not update external scrim embed on confirm (cache ' + cacheId + '): ' + e.message);
+        await interaction.reply({ embeds: [confirmEmbed] });
+    }
+
+    logger.info(`[scrim] External scrim ${scrim_id} confirmed for ${team1?.name} at <t:${bestSlot.start_unix}>`);
+}
+
+async function handleScrimCancelProposal(interaction, cacheId) {
+    let pendingSlots;
+    try {
+        pendingSlots = require('./commands/scrim.js').pendingSlots;
+    } catch (e) {
+        logger.warn('[scrim] Could not require pendingSlots: ' + e.message);
+        await interaction.reply({ content: 'Session expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const cached = pendingSlots.get(cacheId);
+    if (!cached || cached.mode !== 'external_proposal') {
+        await interaction.reply({ content: 'Proposal not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    if (interaction.user.id !== cached.requested_by) {
+        await interaction.reply({ content: 'Only the captain can cancel.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    pendingSlots.delete(cacheId);
+
+    const cancelEmbed = new EmbedBuilder()
+        .setTitle('\u274C Scrim Cancelled')
+        .setDescription('This scrim proposal has been cancelled by the captain.')
+        .setColor(0xED4245);
+
+    try {
+        await interaction.message.edit({ embeds: [cancelEmbed], components: [] });
+    } catch (e) {
+        logger.warn('[scrim] Could not update cancel embed (cache ' + cacheId + '): ' + e.message);
+        await interaction.reply({ embeds: [cancelEmbed], flags: MessageFlags.Ephemeral });
+    }
+
+    logger.info(`[scrim] External proposal ${cacheId} cancelled by ${interaction.user.id}`);
+}
+
+// ── Scrim manual modal handler ─────────────────────────────────────────────────
+
+async function handleScrimManualModal(interaction, cacheId) {
+    const dateInput = interaction.fields.getTextInputValue('manual_date').trim();
+    const timeInput = interaction.fields.getTextInputValue('manual_time').trim();
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+        await interaction.reply({ content: 'Invalid date \u2014 use `YYYY-MM-DD`.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const timeMins = parseTime(timeInput);
+    if (timeMins === null) {
+        await interaction.reply({ content: `Invalid time \u2014 use \`7pm\`, \`7:30pm\`, or \`19:00\`.`, flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    let pendingSlots;
+    try {
+        pendingSlots = require('./commands/scrim.js').pendingSlots;
+    } catch (e) {
+        logger.warn('[scrim] Could not require pendingSlots for manual modal (cache ' + cacheId + '): ' + e.message);
+        await interaction.reply({ content: 'Session expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const cached = pendingSlots.get(cacheId);
+    if (!cached) {
+        await interaction.reply({ content: 'Session expired.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const config = data.getConfig();
+    const timezone = cached.timezone || config.timezone || 'America/New_York';
+    const [y, mo, dy] = dateInput.split('-').map(Number);
+    const start_unix = toUnixTimestamp(y, mo - 1, dy, timeMins, timezone);
+
+    if (cached.mode === 'external' || cached.mode === 'external_proposal') {
+        // Post external proposal directly
+        const team1 = data.getTeam(cached.team1_id);
+        const slots = [{ start_unix, player_count: 0, dateStr: dateInput, interested: [] }];
+        pendingSlots.delete(cacheId);
+
+        const proposalCacheId = randomUUID().replace(/-/g, '').substring(0, 12);
+        pendingSlots.set(proposalCacheId, {
+            ...cached, slots, mode: 'external_proposal',
+        });
+        setTimeout(() => pendingSlots.delete(proposalCacheId), 24 * 60 * 60 * 1000);
+
+        await postExternalScrimEmbed(interaction, data, team1, slots, proposalCacheId,
+            cached.include_subs, cached.allow_fill, cached.requested_by);
+        return;
+    }
+
+    // Internal: send directly to scrim channel
+    const team1 = data.getTeam(cached.team1_id);
+    const team2 = data.getTeam(cached.team2_id);
+    if (!team1 || !team2 || !config.scrim_channel_id) {
+        await interaction.reply({ content: 'Configuration missing.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const scrim_id = randomUUID();
+    const scrims = data.getScrims();
+    scrims[scrim_id] = {
+        id:             scrim_id,
+        team1_id:       cached.team1_id,
+        team2_id:       cached.team2_id,
+        status:         'pending',
+        scheduled_time: new Date(start_unix * 1000).toISOString(),
+        discord_event_id: '',
+        requested_by:   cached.requested_by,
+        include_subs:   cached.include_subs,
+        allow_fill:     cached.allow_fill,
+        fill_interests: [],
+        result:         null,
+        result_embed_posted: false,
+        result_message_id:   '',
+        players_team1:  [],
+        players_team2:  [],
+        created_at:     new Date().toISOString(),
+    };
+    data.saveScrims(scrims);
+
+    pendingSlots.delete(cacheId);
+
+    const scrimChannel = await interaction.guild.channels.fetch(config.scrim_channel_id).catch(() => null);
+    if (!scrimChannel) {
+        await interaction.reply({ content: 'Scrim channel not found.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const acceptRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`SCRIM_ACCEPT_${scrim_id}`).setLabel('Accept').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`SCRIM_DECLINE_${scrim_id}`).setLabel('Decline').setStyle(ButtonStyle.Danger),
+    );
+
+    const embed = new EmbedBuilder()
+        .setTitle(`Scrim Request \u2014 ${team1.name} vs ${team2.name}`)
+        .setDescription(
+            `**${team1.name}** has challenged **${team2.name}** to a scrim!\n\n` +
+            `\uD83D\uDCC5 **Date:** <t:${start_unix}:D>\n` +
+            `\u23F0 **Time:** <t:${start_unix}:t>\n\n` +
+            `<@${team2.captain_id || ''}>, please **Accept** or **Decline**.\n` +
+            (cached.include_subs ? '\u2705 Substitutes included\n' : '') +
+            (cached.allow_fill   ? '\u2705 Fill interest open' : '')
+        )
+        .setColor(0xFEE75C)
+        .setFooter({ text: `Scrim ID: ${scrim_id}` })
+        .setTimestamp();
+
+    await scrimChannel.send({ content: team2.captain_id ? `<@${team2.captain_id}>` : '', embeds: [embed], components: [acceptRow] });
+    await interaction.reply({ content: `\u2705 Manual scrim request sent to **${team2.name}**! Check <#${config.scrim_channel_id}>.`, flags: MessageFlags.Ephemeral });
+
+    logger.info(`[scrim] Manual scrim ${scrim_id} created at <t:${start_unix}> by ${interaction.user.id}`);
 }
 
 module.exports = register_handlers;

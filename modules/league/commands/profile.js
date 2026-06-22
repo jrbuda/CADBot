@@ -1,6 +1,6 @@
 'use strict';
 const { EmbedBuilder } = require('discord.js');
-const { getRankedStats } = require('../lib/riot_api.js');
+const { getRankedStatsByPuuid } = require('../lib/riot_api.js');
 
 const POSITION_EMOJI = {
     Top: '🛡️', Jungle: '🌿', Mid: '⚡', Bot: '🏹', Support: '💊',
@@ -16,7 +16,7 @@ module.exports = {
     name: 'profile',
     description: 'View a linked player\'s League of Legends profile and team info.',
     permission: 'EVERYONE',
-    ephemeral: true,
+
     options: [
         {
             name: 'player',
@@ -27,10 +27,8 @@ module.exports = {
         },
     ],
 
-    async autocomplete(interaction) {
-        const path = require('path');
-        const DataManager = require('../../../core/js/data_manager.js');
-        const data = new DataManager(path.join(__dirname, '../../../data'), { error: () => {}, info: () => {} });
+    async autocomplete(interaction, extra) {
+        const data = extra.data;
 
         const query   = interaction.options.getFocused().toLowerCase();
         const players = data.getPlayers();
@@ -63,7 +61,7 @@ module.exports = {
             const member = await message.guild.members.fetch(target_id);
             displayName  = member.displayName || member.user.globalName || member.user.username;
             avatarUrl    = member.user.displayAvatarURL({ size: 256 });
-        } catch (_) { /* member may have left; fall back to above */ }
+        } catch (e) { this.logger.warn('[profile] Could not fetch member ' + target_id + ': ' + e.message); }
 
         const team     = player.team_id ? data.getTeam(player.team_id) : null;
         const posEmoji = POSITION_EMOJI[player.team_role] || '';
@@ -91,9 +89,11 @@ module.exports = {
         }
 
         // Attempt to fetch ranked stats from Riot API
-        if (player.summoner_id) {
+        if (!player.puuid) {
+            embed.addFields({ name: 'Ranked', value: 'Account data incomplete — try `/link` again.', inline: true });
+        } else {
             try {
-                const ranked = await getRankedStats(player.summoner_id, this.logger);
+                const ranked = await getRankedStatsByPuuid(player.puuid, this.logger);
                 const solo   = ranked.find(q => q.queueType === 'RANKED_SOLO_5x5');
                 const flex   = ranked.find(q => q.queueType === 'RANKED_FLEX_SR');
 
@@ -120,7 +120,8 @@ module.exports = {
                 }
             } catch (err) {
                 this.logger.warn('[profile] Ranked stats fetch failed: ' + err.message);
-                embed.addFields({ name: 'Ranked', value: '_Unable to fetch_', inline: true });
+                const status = err.response?.status || 'unknown';
+                embed.addFields({ name: 'Ranked', value: `_Unable to fetch (${status})_`, inline: true });
             }
         }
 

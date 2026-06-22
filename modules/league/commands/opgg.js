@@ -12,7 +12,7 @@ function opggRegionSlug() {
 module.exports = {
     name: 'opgg',
     description: 'Get op.gg profile or multi-search link for a player or team.',
-    permission: 'MEMBER',
+    permission: 'EVERYONE',
     options: [
         {
             name: 'player',
@@ -30,10 +30,8 @@ module.exports = {
         },
     ],
 
-    async autocomplete(interaction) {
-        const path = require('path');
-        const DataManager = require('../../../core/js/data_manager.js');
-        const data = new DataManager(path.join(__dirname, '../../../data'), { error: () => {}, info: () => {} });
+    async autocomplete(interaction, extra) {
+        const data = extra.data;
 
         const focused = interaction.options.getFocused(true);
         const query   = focused.value.toLowerCase();

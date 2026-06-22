@@ -14,83 +14,100 @@ module.exports = {
     description: 'Create and manage game sessions — customs, tryouts, practice, and more.',
     permission: 'EVERYONE',
     no_defer: false,
-    options: [
+    subcommands: [
         {
-            name: 'action',
-            description: 'What to do',
-            type: 'STRING',
-            required: true,
-            choices: [
-                { name: 'Create session',  value: 'create' },
-                { name: 'List sessions',   value: 'list'   },
-                { name: 'View interested', value: 'view'   },
-                { name: 'Close session',   value: 'close'  },
+            name: 'create',
+            description: 'Create a new game session (captains and admins only)',
+            options: [
+                {
+                    name: 'time',
+                    description: 'Start time — 7pm, 7:30pm, or 19:00',
+                    type: 'STRING',
+                    required: true,
+                },
+                {
+                    name: 'date',
+                    description: 'Date — YYYY-MM-DD. Defaults to today in your timezone.',
+                    type: 'STRING',
+                    required: false,
+                },
+                {
+                    name: 'name',
+                    description: 'Session name — auto-generated if omitted',
+                    type: 'STRING',
+                    required: false,
+                },
+                {
+                    name: 'type',
+                    description: 'Session type',
+                    type: 'STRING',
+                    required: false,
+                    choices: SESSION_TYPES,
+                },
+                {
+                    name: 'spots',
+                    description: 'Available spots (default 10)',
+                    type: 'INTEGER',
+                    required: false,
+                    min_value: 1,
+                    max_value: 20,
+                },
+                {
+                    name: 'open_to',
+                    description: 'Who can express interest',
+                    type: 'STRING',
+                    required: false,
+                    choices: [
+                        { name: 'Members + Tryouts', value: 'member_tryout' },
+                        { name: 'Team members only', value: 'member'   },
+                        { name: 'Tryouts only',      value: 'tryout'   },
+                        { name: 'Anyone',            value: 'everyone' },
+                    ],
+                },
+                {
+                    name: 'team',
+                    description: 'Associate with a team and post to their game channel',
+                    type: 'STRING',
+                    required: false,
+                    autocomplete: true,
+                },
             ],
         },
         {
-            name: 'name',
-            description: '(create) Session name — auto-generated if omitted',
-            type: 'STRING',
-            required: false,
+            name: 'list',
+            description: 'List all active game sessions',
+            options: [],
         },
         {
-            name: 'date',
-            description: '(create) Date — YYYY-MM-DD. Defaults to today in your timezone.',
-            type: 'STRING',
-            required: false,
-        },
-        {
-            name: 'time',
-            description: '(create) Start time — 7pm, 7:30pm, or 19:00',
-            type: 'STRING',
-            required: false,
-        },
-        {
-            name: 'type',
-            description: '(create) Session type',
-            type: 'STRING',
-            required: false,
-            choices: SESSION_TYPES,
-        },
-        {
-            name: 'spots',
-            description: '(create) Available spots (default 10)',
-            type: 'INTEGER',
-            required: false,
-            min_value: 1,
-            max_value: 20,
-        },
-        {
-            name: 'open_to',
-            description: '(create) Who can express interest',
-            type: 'STRING',
-            required: false,
-            choices: [
-                { name: 'Team members only', value: 'member'   },
-                { name: 'Tryouts only',      value: 'tryout'   },
-                { name: 'Anyone',            value: 'everyone' },
+            name: 'view',
+            description: 'View who has signed up for a session',
+            options: [
+                {
+                    name: 'session',
+                    description: 'Session to view',
+                    type: 'STRING',
+                    required: true,
+                    autocomplete: true,
+                },
             ],
         },
         {
-            name: 'team',
-            description: '(create) Associate with a team and post to their game channel',
-            type: 'STRING',
-            required: false,
-            autocomplete: true,
-        },
-        {
-            name: 'session',
-            description: '(view/close) Session to manage',
-            type: 'STRING',
-            required: false,
-            autocomplete: true,
+            name: 'close',
+            description: 'Close a game session (creator, team captain, or admin)',
+            options: [
+                {
+                    name: 'session',
+                    description: 'Session to close',
+                    type: 'STRING',
+                    required: true,
+                    autocomplete: true,
+                },
+            ],
         },
     ],
 
-    async autocomplete(interaction) {
-        const path = require('path');
-        const DataManager = require('../../../core/js/data_manager.js');
-        const data = new DataManager(path.join(__dirname, '../../../data'), { error: () => {}, info: () => {} });
+    async autocomplete(interaction, extra) {
+        const data = extra.data;
 
         const focused = interaction.options.getFocused(true);
         const query   = focused.value.toLowerCase();
@@ -103,7 +120,7 @@ module.exports = {
                 .map(t => ({ name: t.name, value: t.id }));
             await interaction.respond(choices);
         } else {
-            // session autocomplete
+            // session autocomplete (for view/close)
             const sessions = data.getSessions();
             const choices  = Object.values(sessions)
                 .filter(s => s.status !== 'closed' && s.name.toLowerCase().includes(query))
@@ -117,12 +134,10 @@ module.exports = {
         const data        = extra.data;
         const interaction = extra.interaction;
         const permissions = extra.permissions;
-
-        const action = interaction.options.getString('action');
+        const subcommand  = interaction.options.getSubcommand();
 
         // ── CREATE ───────────────────────────────────────────────────────────
-        if (action === 'create') {
-            // Captains can create for their own team; admins can create for any team
+        if (subcommand === 'create') {
             const isCaptain = permissions.check('CAPTAIN', message.member, message.author.id);
             if (!isCaptain) {
                 await message.channel.send({ content: 'Only captains and admins can create sessions.' });
@@ -132,22 +147,18 @@ module.exports = {
             const name_input = interaction.options.getString('name')?.trim();
             const date_input = interaction.options.getString('date');
             const time_input = interaction.options.getString('time');
-            const spots      = interaction.options.getInteger('spots')   ?? 10;
-            const type       = interaction.options.getString('type')     || 'custom_game';
-            const open_to    = interaction.options.getString('open_to')  || 'member';
+
+            const prefs = data.getCaptainPrefs();
+            const myPrefs = prefs[message.author.id] || {};
+
+            const spots      = interaction.options.getInteger('spots')   ?? myPrefs.game_spots    ?? 10;
+            const type       = interaction.options.getString('type')     || myPrefs.game_type     || 'practice';
+            const open_to    = interaction.options.getString('open_to')  || myPrefs.game_open_to  || 'member_tryout';
             let   team_id    = interaction.options.getString('team')     || null;
 
-            // ── Resolve user timezone ─────────────────────────────────────────
             const userAvail  = data.getAvailability()[message.author.id];
             const timezone   = userAvail?.timezone || data.getConfig().timezone || 'America/New_York';
 
-            // ── Validate and parse time ───────────────────────────────────────
-            if (!time_input) {
-                await message.channel.send({
-                    content: '❌ A start time is required. Use `time:8pm`, `time:7:30pm`, or `time:19:00`.',
-                });
-                return;
-            }
             const timeMins = parseTime(time_input);
             if (timeMins === null) {
                 await message.channel.send({
@@ -156,7 +167,6 @@ module.exports = {
                 return;
             }
 
-            // ── Resolve date ──────────────────────────────────────────────────
             let sessionDate;
             let dateWasProvided = !!date_input;
 
@@ -167,15 +177,13 @@ module.exports = {
                 }
                 sessionDate = date_input;
             } else {
-                // Default to today in the user's timezone
                 sessionDate = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
             }
 
-            // ── Build Unix timestamp ──────────────────────────────────────────
             const [y, mo, dy] = sessionDate.split('-').map(Number);
             let start_unix = toUnixTimestamp(y, mo - 1, dy, timeMins, timezone);
 
-            // If time has already passed today, automatically schedule for tomorrow
+            let autoTomorrow = false;
             if (!dateWasProvided && start_unix < Math.floor(Date.now() / 1000)) {
                 const tomorrow = new Date(Date.UTC(y, mo - 1, dy) + 86400000);
                 const tY = tomorrow.getUTCFullYear();
@@ -183,25 +191,24 @@ module.exports = {
                 const tD = tomorrow.getUTCDate();
                 start_unix  = toUnixTimestamp(tY, tM, tD, timeMins, timezone);
                 sessionDate = `${tY}-${String(tM + 1).padStart(2, '0')}-${String(tD).padStart(2, '0')}`;
+                autoTomorrow = true;
             }
 
-            // ── Auto-resolve captain's team ───────────────────────────────────
             if (!team_id) {
                 const captainTeam = data.getTeamByCaptain(message.author.id);
                 if (captainTeam) team_id = captainTeam.id;
             }
 
-            // ── Resolve destination channel ───────────────────────────────────
             let dest_channel_id = message.channel.id;
             if (team_id) {
                 const team = data.getTeam(team_id);
                 if (team?.channels?.game) dest_channel_id = team.channels.game;
             }
 
-            // ── Persist session ───────────────────────────────────────────────
+            const typeLabel  = SESSION_TYPES.find(t => t.value === type)?.name || type;
             const sessions   = data.getSessions();
             const session_id = randomUUID();
-            const name       = name_input || `Gaming Session #${Object.keys(sessions).length + 1}`;
+            const name       = name_input || `${typeLabel} — ${sessionDate}`;
 
             sessions[session_id] = {
                 id:          session_id,
@@ -221,21 +228,22 @@ module.exports = {
             };
             data.saveSessions(sessions);
 
-            // ── Build embed ───────────────────────────────────────────────────
-            const typeLabel = SESSION_TYPES.find(t => t.value === type)?.name || type;
             const team      = team_id ? data.getTeam(team_id) : null;
+
+            const descParts = [
+                `📅 <t:${start_unix}:F>`,
+                `🕐 <t:${start_unix}:R>`,
+                `🎮 **Type:** ${typeLabel}`,
+                `👥 **Spots:** ${spots}`,
+                team ? `🛡️ **Team:** ${team.name}` : null,
+                `👋 **Open to:** ${open_to === 'member' ? 'Team members' : open_to === 'tryout' ? 'Tryouts' : open_to === 'member_tryout' ? 'Members + Tryouts' : 'Anyone'}`,
+                null,
+                `Click below if you're in!`,
+            ].filter(Boolean).join('\n');
 
             const embed = new EmbedBuilder()
                 .setTitle(`${typeLabel} — ${name}`)
-                .setDescription(
-                    `📅 <t:${start_unix}:F>\n` +
-                    `🕐 <t:${start_unix}:R>\n` +
-                    `🎮 **Type:** ${typeLabel}\n` +
-                    `👥 **Spots:** ${spots}\n` +
-                    (team ? `🛡️ **Team:** ${team.name}\n` : '') +
-                    `👋 **Open to:** ${open_to === 'member' ? 'Team members' : open_to === 'tryout' ? 'Tryouts' : 'Anyone'}\n\n` +
-                    `Click below if you're in!`
-                )
+                .setDescription(descParts)
                 .setColor(0xED4245)
                 .setFooter({ text: `Session ID: ${session_id}` })
                 .setTimestamp();
@@ -247,34 +255,67 @@ module.exports = {
                     .setStyle(ButtonStyle.Success),
             );
 
-            // ── Post ──────────────────────────────────────────────────────────
+            const settingsRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`GAME_SETTINGS_${session_id}`)
+                    .setLabel('\u2699\uFE0F Settings')
+                    .setStyle(ButtonStyle.Secondary),
+            );
+
             let posted;
             try {
                 const destCh = dest_channel_id !== message.channel.id
                     ? await message.guild.channels.fetch(dest_channel_id)
                     : null;
                 posted = destCh
-                    ? await destCh.send({ embeds: [embed], components: [row] })
-                    : await message.channel.send({ embeds: [embed], components: [row] });
-            } catch (_) {
-                posted = await message.channel.send({ embeds: [embed], components: [row] });
+                    ? await destCh.send({ embeds: [embed], components: [row, settingsRow] })
+                    : await message.channel.send({ embeds: [embed], components: [row, settingsRow] });
+            } catch (e) {
+                this.logger.warn('[game] Could not send session to team channel ' + dest_channel_id + ': ' + e.message);
+                posted = await message.channel.send({ embeds: [embed], components: [row, settingsRow] });
             }
 
             sessions[session_id].message_id = posted.id;
             data.saveSessions(sessions);
 
+            if (isCaptain) {
+                prefs[message.author.id] = { game_type: type, game_spots: spots, game_open_to: open_to };
+                data.saveCaptainPrefs(prefs);
+            }
+
+            const config = data.getConfig();
+            if ((open_to === 'tryout' || open_to === 'everyone' || open_to === 'member_tryout')
+                && config.tryout_announcements_channel_id) {
+                try {
+                    const tryoutCh = await message.guild.channels.fetch(config.tryout_announcements_channel_id);
+                    if (tryoutCh && tryoutCh.id !== dest_channel_id) {
+                        const tryoutEmbed = EmbedBuilder.from(embed);
+                        const tryoutRow = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`GAME_INTEREST_${session_id}`)
+                                .setLabel("I'm In")
+                                .setStyle(ButtonStyle.Success),
+                        );
+                        await tryoutCh.send({ embeds: [tryoutEmbed], components: [tryoutRow] });
+                    }
+                } catch (e) { this.logger.warn('[game] Could not send tryout announcement for session ' + session_id + ': ' + e.message); }
+            }
+
             const routeNote = dest_channel_id !== message.channel.id
                 ? ` → posted to <#${dest_channel_id}>`
                 : '';
+            const tomorrowNote = autoTomorrow
+                ? '\n⏰ The time you picked has already passed today, so this session was scheduled for **tomorrow** instead.'
+                : '';
             await message.channel.send({
-                content: `Session **${name}** created for <t:${start_unix}:F>!${routeNote}`,
+                content: `Session **${name}** created for <t:${start_unix}:F>!${routeNote}${tomorrowNote}`,
             });
             this.logger.info(`[game] Session created: ${name} (${session_id}) at unix ${start_unix}`);
             return;
         }
 
         // ── LIST ──────────────────────────────────────────────────────────────
-        if (action === 'list') {
+        if (subcommand === 'list') {
             const sessions = data.getSessions();
             const open     = Object.values(sessions).filter(s => s.status !== 'closed');
 
@@ -303,8 +344,8 @@ module.exports = {
             return;
         }
 
-        // ── VIEW INTERESTED ───────────────────────────────────────────────────
-        if (action === 'view') {
+        // ── VIEW ──────────────────────────────────────────────────────────────
+        if (subcommand === 'view') {
             const session_id = interaction.options.getString('session');
             if (!session_id) {
                 await message.channel.send({ content: 'Please select a session from the dropdown.' });
@@ -333,7 +374,7 @@ module.exports = {
         }
 
         // ── CLOSE ─────────────────────────────────────────────────────────────
-        if (action === 'close') {
+        if (subcommand === 'close') {
             const session_id = interaction.options.getString('session');
             if (!session_id) {
                 await message.channel.send({ content: 'Please select a session from the dropdown.' });
@@ -347,7 +388,6 @@ module.exports = {
                 return;
             }
 
-            // Captains can close sessions for their own team; admins can close anything
             const isAdmin   = permissions.check('ADMIN', message.member, message.author.id);
             const myTeam    = data.getTeamByCaptain(message.author.id);
             const canClose  = isAdmin || (myTeam && session.team_id === myTeam.id) || session.created_by === message.author.id;
